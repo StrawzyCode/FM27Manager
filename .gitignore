@@ -1,6 +1,7 @@
 # Build output (rebuild with build_exe.bat)
 build/
 dist/
+.build-venv/
 
 # Python
 __pycache__/

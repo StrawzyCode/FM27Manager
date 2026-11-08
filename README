@@ -148,8 +148,10 @@ says "layout not recognised" instead of showing wrong data. The scan finds the
 player pages structurally (the same engine vtable repeating every 968 bytes),
 so only the offsets in `layout.py` ever need re-calibrating.
 
-To rebuild the exe: `build_exe.bat` (needs Python 3 with `numpy` and
-`pyinstaller`: `pip install -r requirements.txt`). To run from source: `python server.py`.
+To rebuild the exe: double-click `build_exe.bat` (or `.\build_exe.bat` in PowerShell). It needs Python 3 on
+PATH and builds in its own environment, `.build-venv`, which it sets up from `requirements.txt` on the first run
+(needs internet). Packages in your main Python can't interfere with it. To run from source:
+`pip install -r requirements.txt`, then `python server.py`.
 
 ---
 
