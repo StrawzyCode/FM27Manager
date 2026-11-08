@@ -19,6 +19,8 @@ ENGINE_BASE, ENGINE_SIZE = 0x7FF600000000, 0x100000
 VT_PLAYER, VT_PERSON = ENGINE_BASE + 0x1000, ENGINE_BASE + 0x2000
 GAME_DATE = datetime.date(2026, 7, 15)
 HIST_SLOT = 0x2A8                    # where the test puts the career-history header pointer
+RECORD_BLOCK = 0x60000000            # the player records' own memory block ...
+RECORD_BLOCK_SHORT = 0x50            # ... which ends this many bytes before the last record's window (as in FM27)
 
 
 class Mem:
@@ -31,15 +33,24 @@ class Mem:
         return arr
 
     def read(self, addr, size):
+        """Like ReadProcessMemory: a read running off the end of a region comes back short."""
         for base, arr in self.regions:
             if base <= addr < base + len(arr):
                 off = addr - base
                 return arr[off:off + size].copy()
         return None
 
+    def write(self, addr, b):
+        for base, arr in self.regions:
+            if base <= addr and addr + len(b) <= base + len(arr):
+                arr[addr - base:addr - base + len(b)] = np.frombuffer(b, dtype=np.uint8)
+                return
+        raise AssertionError('write outside the fake memory at %#x' % addr)
+
 
 class Heap:
     def __init__(self, mem, base, size):
+        self.mem = mem
         self.arr = mem.add(base, size)
         self.base = base
         self.top = base + 0x1000
@@ -55,8 +66,7 @@ class Heap:
         self.wb(addr, struct.pack('<' + fmt, *vals))
 
     def wb(self, addr, b):
-        off = addr - self.base
-        self.arr[off:off + len(b)] = np.frombuffer(b, dtype=np.uint8)
+        self.mem.write(addr, b)          # any region, so the player records can live in a block of their own
 
     def lenstr(self, s):
         b = s.encode('utf-8')
@@ -119,10 +129,12 @@ def build(seed=7):
         clubs[name] = {'ptr': c, 'holder': holder, 'nation': nation, 'level': level}
     w.clubs = clubs
 
-    # records: 3 pages of 1024
+    # records: 3 pages of 1024, back to back in a memory block of their own - the way an FM27 save can hold
+    # most of its database (78k players in one run). As in the game, the block ends a little before the last
+    # record's 968-byte window does, so a read of the whole run comes back short.
     n = 3 * 1024
-    pages = [heap.alloc(1024 * 968, align=64) for _ in range(3)]
-    recs = [pages[k // 1024] + (k % 1024) * 968 for k in range(n)]
+    mem.add(RECORD_BLOCK, n * 968 - RECORD_BLOCK_SHORT)
+    recs = [RECORD_BLOCK + k * 968 for k in range(n)]
     w.recs = recs
     w.players = []
     names_first = ['Aleksi', 'Eetu', 'Joona', 'Oskari', 'Lauri', 'Niko', 'Johan', 'Erik', 'Oliver', 'Kofi',

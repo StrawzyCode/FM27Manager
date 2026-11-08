@@ -17,6 +17,9 @@ ENGINE_DLL = 'game_plugin.dll'
 
 CHUNK = 32 * 1024 * 1024
 OVERLAP = 4 * 1024 * 1024
+# A record cut short at the end of its memory block is still used when at least this much of it could
+# be read: every field the reader uses lies below it (the furthest, the previous club, ends at 0x250).
+PARTIAL_RECORD_MIN = 0x300
 
 
 class FMNotRunning(RuntimeError):
@@ -1184,22 +1187,32 @@ class FM26Reader:
             o += c
 
         def read_run(item):
+            """How many records of the run were read (the first ones; the rest are dropped).
+
+            A save can hold most of the database as one contiguous block (FM27: ~78k players in a
+            single 72 MB run). The last record's 968-byte window can then reach a few bytes past the
+            end of the committed memory, so one exact read of the run fails - which used to throw the
+            whole block away. Keep every record that was read in full instead, plus a final one that
+            only misses the unused tail of its window (zero-filled)."""
             (first, c), o0 = item
             start = first - L.PRE
-            buf = proc.read_exact(start, c * L.RECORD_SIZE)
-            if buf is None:
-                return False
-            N[o0:o0 + c] = buf.reshape(c, L.RECORD_SIZE)
-            bases[o0:o0 + c] = start + np.arange(c, dtype=np.int64) * L.RECORD_SIZE
-            return True
+            buf = proc.read(start, c * L.RECORD_SIZE)
+            got = 0 if buf is None else len(buf)
+            k, rest = divmod(got, L.RECORD_SIZE)
+            if k < c and rest >= PARTIAL_RECORD_MIN:
+                buf = np.concatenate([buf, np.zeros(L.RECORD_SIZE - rest, dtype=np.uint8)])
+                k += 1
+            if k:
+                N[o0:o0 + k] = buf[:k * L.RECORD_SIZE].reshape(k, L.RECORD_SIZE)
+                bases[o0:o0 + k] = start + np.arange(k, dtype=np.int64) * L.RECORD_SIZE
+            return k
 
         with ThreadPoolExecutor(max_workers=8) as ex:
-            ok = list(ex.map(read_run, zip(runs, offs)))
-        if not all(ok):
+            got = list(ex.map(read_run, zip(runs, offs)))
+        if any(k < c for (_first, c), k in zip(runs, got)):
             keep = np.zeros(total, dtype=bool)
-            for (first, c), o0, good in zip(runs, offs, ok):
-                if good:
-                    keep[o0:o0 + c] = True
+            for (_first, c), o0, k in zip(runs, offs, got):
+                keep[o0:o0 + k] = True
             N, bases = N[keep], bases[keep]
         t_read = time.time()
 
