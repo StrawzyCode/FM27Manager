@@ -1,9 +1,9 @@
 """A synthetic Football Manager process for testing FM27 Plus without the game (any OS).
 
 Builds a fake address space with the exact layout fm26mem expects (player record pages, names,
-nations, clubs, contracts, loans, an injury department list, recent-injury objects and - when the
-history layout is patched in - career histories) and installs a stub `fm26mem.winmem` so the real
-reader and server run against it.
+nations, clubs, contracts, loans, an injury department list, recent-injury objects and relation
+lists with home-grown eligibility) and installs a stub `fm26mem.winmem` so the real reader and server
+run against it.
 """
 import datetime
 import os
@@ -18,7 +18,6 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE_BASE, ENGINE_SIZE = 0x7FF600000000, 0x100000
 VT_PLAYER, VT_PERSON = ENGINE_BASE + 0x1000, ENGINE_BASE + 0x2000
 GAME_DATE = datetime.date(2026, 7, 15)
-HIST_SLOT = 0x2A8                    # where the test puts the career-history header pointer
 RECORD_BLOCK = 0x60000000            # the player records' own memory block ...
 RECORD_BLOCK_SHORT = 0x50            # ... which ends this many bytes before the last record's window (as in FM27)
 
@@ -271,36 +270,49 @@ def build(seed=7):
     w.not_injured = [D['name'], F['name'], G['name']]
     w.inj_players = dict(A=A, B=B, C=C, D=D, E=E, F=F, G=G)
 
-    # career histories (only read when the test patches layout.HISTORY_*): record+HIST_SLOT -> header [begin, end)
-    def history(pl, seasons):
-        if not seasons:
-            return
-        ent = heap.alloc(0x20 * len(seasons))
-        for j, (year, club, loan) in enumerate(seasons):
-            heap.w(ent + j * 0x20, 'H', year)
-            heap.w(ent + j * 0x20 + 8, 'Q', clubs[club]['ptr'])
-            heap.w(ent + j * 0x20 + 0x10, 'B', 1 if loan else 0)
+    # relation lists (record + 0x1B8 -> header [begin, end) of 16-byte entries: ptr, 2 pad bytes, 2 type
+    # bytes, value, 0xFF, 0, 0xFF). Home-grown eligibility is an entry per (nation or club, type), as the game
+    # keeps it: 08 46 -> nation, 01 48 -> club; type 1 = "Homegrown 15-21", 2 = "Homegrown 0-21".
+    NATION_HG, CLUB_HG, SECONDARY, FAVOURITE = (0x08, 0x46), (0x01, 0x48), (0x08, 0x09), (0x01, 0x03)
+
+    def relations(pl, entries):
+        ent = heap.alloc(16 * len(entries))
+        for j, (ptr, (t1, t2), value) in enumerate(entries):
+            heap.w(ent + 16 * j, 'Q', ptr)
+            heap.wb(ent + 16 * j + 8, bytes([0, 0, t1, t2, value, 0xFF, 0, 0xFF]))
         hdr = heap.alloc(0x20)
-        heap.w(hdr, 'QQ', ent, ent + 0x20 * len(seasons))
-        heap.w(pl['rec'] + HIST_SLOT, 'Q', hdr)
+        heap.w(hdr, 'QQ', ent, ent + 16 * len(entries))
+        heap.w(pl['rec'] + 0x1B8, 'Q', hdr)
 
     for p in w.players:
         if not p['club']:
             continue
-        start = max(p['dob'].year + 16, gd.year - 6)
-        history(p, [(y, p['club'], False) for y in range(start, gd.year + 1)])
-    # two hand-made cases: a Swede trained in Finland, a Finn trained in Sweden
+        level = 1 if p['age'] >= 18 else 2                  # the young ones are only trained 0-21 so far
+        relations(p, [(nat[p['nation']], NATION_HG, level), (clubs[p['club']]['ptr'], CLUB_HG, level)])
+    # hand-made cases: a Swede trained in Finland, a Finn trained in Sweden
     h1, h2 = w.kapa_squad[3], w.kapa_squad[4]
     for pl, nation, born in ((h1, 'Sweden', 2006), (h2, 'Finland', 2005)):
         dob = datetime.date(born, 3, 1)
         heap.w(pl['rec'] + 0x1C8, 'HH', doy(dob), dob.year)
         heap.w(pl['rec'] + 0x1A8, 'Q', nat[nation])
         pl['dob'], pl['nation'], pl['age'] = dob, nation, gd.year - born
-    history(h1, [(2021, 'PK-35', False), (2022, 'PK-35', False), (2023, 'KäPa', False), (2024, 'KäPa', False),
-                 (2025, 'KäPa', False), (2026, 'KäPa', False)])
-    history(h2, [(2020, 'Malmö', False), (2021, 'Malmö', False), (2022, 'Malmö', False), (2023, 'HJK', True),
-                 (2024, 'KäPa', False), (2025, 'KäPa', False), (2026, 'KäPa', False)])
-    w.hg_swede_in_finland, w.hg_finn_in_sweden = h1, h2
+    relations(h1, [(nat['Estonia'], SECONDARY, 0x64),                   # a secondary nationality, not home-grown
+                   (clubs['PK-35']['ptr'], CLUB_HG, 1), (clubs['KäPa']['ptr'], CLUB_HG, 1),
+                   (nat['Finland'], NATION_HG, 1)])
+    relations(h2, [(clubs['KäPa']['ptr'], FAVOURITE, 0x4B),             # a favourite club, not where he trained
+                   (clubs['Malmö']['ptr'], CLUB_HG, 1), (nat['Sweden'], NATION_HG, 1),
+                   (nat['Finland'], NATION_HG, 2),                      # Finland 0-21 only
+                   (nat['Finland'], NATION_HG, 3)])                     # a country-specific type: ignored
+    # a long relation list (more than the 32 entries read in the batch) with its home-grown entries at the end
+    h3 = w.kapa_squad[5]
+    relations(h3, [(clubs['Arsenal']['ptr'], FAVOURITE, 0x50)] * 40
+              + [(nat['England'], NATION_HG, 1), (clubs['KäPa']['ptr'], CLUB_HG, 2)])
+    # a youth-intake player with only "KäPa 0-21": the game lists him as Finland 0-21 too (the club's country)
+    h4 = w.kapa_squad[6]
+    heap.w(h4['rec'] + 0x1A8, 'Q', nat['Ghana'])
+    h4['nation'] = 'Ghana'
+    relations(h4, [(clubs['KäPa']['ptr'], CLUB_HG, 2)])
+    w.hg_swede_in_finland, w.hg_finn_in_sweden, w.hg_long_list, w.hg_club_only = h1, h2, h3, h4
     return w
 
 
@@ -340,13 +352,3 @@ def install(world):
     if REPO not in sys.path:
         sys.path.insert(0, REPO)
     return mod
-
-
-def patch_history_layout():
-    from fm26mem import layout as L
-    L.HISTORY_PATH = (HIST_SLOT,)
-    L.HISTORY_HEADER = 0
-    L.HISTORY_ENTRY_SIZE = 0x20
-    L.HISTORY_ENTRY_YEAR = 0
-    L.HISTORY_ENTRY_CLUB = 8
-    L.HISTORY_ENTRY_LOAN = 0x10

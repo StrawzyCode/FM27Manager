@@ -30,7 +30,7 @@ check(len(snap.N) == len(world.recs) and snap.names[-1] == world.players[-1]['na
       'every record read, though the last one runs past the end of its memory block (%d of %d)' % (len(snap.N), len(world.recs)))
 check(snap.info['club'] == 'KäPa', 'human club found')
 check(snap.info['squad'] == len(world.kapa_squad), 'squad size %d == %d' % (snap.info['squad'], len(world.kapa_squad)))
-check(snap.info['home_grown_ready'] is False, 'home-grown reports not ready until calibrated')
+check(snap.info['home_grown_ready'] is True, 'home-grown status reported as available')
 
 # --- injuries
 report = {}
@@ -76,26 +76,31 @@ print('players who would only come on loan:', len(loan_only_targets),
       [(snap.names[i], snap.club_names([snap.club_ptr[i]])[int(snap.club_ptr[i])], int(snap.age[i]), int(snap.ca[i])) for i in loan_only_targets[:5]])
 check(len(loan_only_targets) > 0, 'some players are loan-only targets (bigger clubs, not playing)')
 
-# --- home-grown: not calibrated -> filter ignored, then with the test layout patched in
-check(snap.home_grown('nation15', 'Finland') is None, 'home_grown() is None while uncalibrated')
-check(len(idx_q(home_grown=('nation15', 'Finland', False))) == len(everyone), 'uncalibrated home-grown filter is ignored')
-fakefm.patch_history_layout()
-snap.info['home_grown_ready'] = snap.home_grown_ready()
-hg_fin = snap.home_grown('nation15', 'Finland')
+# --- home-grown: read from the game's eligibility entries in the relation list
+hg = {r: snap.home_grown(r, 'Finland') for r in ('nation15', 'nation0')}
 hg_swe = snap.home_grown('nation15', 'Sweden')
-hg_club = snap.home_grown('club15')
-h1, h2 = world.hg_swede_in_finland, world.hg_finn_in_sweden
-i1, i2 = h1['idx'], h2['idx']
+hg_club15, hg_club0 = snap.home_grown('club15'), snap.home_grown('club0')
+h1, h2, h3 = world.hg_swede_in_finland, world.hg_finn_in_sweden, world.hg_long_list
+i1, i2, i3 = h1['idx'], h2['idx'], h3['idx']
 check(snap.names[i1] == h1['name'] and snap.names[i2] == h2['name'], 'record indices line up')
-check(bool(hg_fin[i1]) and not bool(hg_swe[i1]), 'Swede with 4 Finnish seasons at 15-18: trained in Finland, not Sweden')
-check(bool(hg_swe[i2]), 'Finn with 3 Swedish seasons at 15-17: trained in Sweden')
-check(bool(hg_fin[i2]), '... and in Finland too: a loan at 18 + KaPa at 19, 20 = 3 Finnish seasons (loans count for nation rules)')
-check(bool(hg_club[i1]), 'trained at club (KäPa 17-20 = 4 seasons)')
-check(not bool(hg_club[i2]), 'not trained at club (KäPa only from 19)')
-n_fin = int(hg_fin[snap.valid].sum())
+check(bool(hg['nation15'][i1]) and not bool(hg_swe[i1]), 'Swede listed "Homegrown 15-21" for Finland: trained in Finland, not Sweden')
+check(bool(hg_swe[i2]) and not bool(hg['nation15'][i2]), 'Finn listed 15-21 for Sweden and only 0-21 for Finland: not Finland (15-21)')
+check(bool(hg['nation0'][i2]) and bool(hg['nation0'][i1]), '... Finland (0-21) accepts both the 0-21 and the 15-21 entry')
+check(bool(hg_club15[i1]) and not bool(hg_club15[i2]), 'trained at club: KäPa entry yes; a favourite-club entry for KäPa no')
+check(snap.nation_table.get(int(snap.secondary_nations()[i1][0])) == 'Estonia', 'secondary nationality still read (Estonia)')
+check(bool(snap.home_grown('nation15', 'England')[i3]) and bool(hg_club0[i3]) and not bool(hg_club15[i3]),
+      'entries past the first 32 of a long relation list are read (England 15-21, KäPa 0-21)')
+i4 = world.hg_club_only['idx']
+check(bool(hg['nation0'][i4]) and not bool(hg['nation15'][i4]) and not snap.home_grown('nation0', 'Ghana')[i4],
+      'a club entry counts for the club\'s country: KäPa 0-21 only = Finland 0-21, whatever his nationality')
+check(snap.home_grown('nation15', 'Atlantis') is not None and not snap.home_grown('nation15', 'Atlantis').any(),
+      'an unknown nation matches nobody')
+check(snap.home_grown('nation15', '') is None, 'no nation given: rule not applied')
+n_fin = int(hg['nation15'][snap.valid].sum())
 in_q = idx_q(home_grown=('nation15', 'Finland', False))
 not_q = idx_q(home_grown=('nation15', 'Finland', True))
 check(len(in_q) + len(not_q) == len(everyone), '"is" and "is not" split the pool')
+check(len(idx_q(home_grown=('nation0', 'Finland', False))) >= len(in_q), '0-21 pool includes the 15-21 pool')
 print('trained in Finland (15-21): %d players; pool split %d / %d' % (n_fin, len(in_q), len(not_q)))
 
 print('\n%d failure(s)' % len(fails))

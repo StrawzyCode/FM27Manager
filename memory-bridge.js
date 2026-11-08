@@ -235,8 +235,8 @@
     }
     if (hgNote) {
       hgNote.textContent = ready
-        ? 'At least 3 seasons registered with clubs in that nation (or at your club) inside the age window, from his career history.'
-        : 'Home-grown status isn\'t available yet: the career history it needs hasn\'t been located in this game version\'s memory (see CALIBRATION.md). The filter is ignored until then.';
+        ? 'Read from the game\'s own eligibility list (a player\'s Personal → Eligibility screen): only rows that are Fully Eligible count, a club counts for its country, and (0-21) includes (15-21).'
+        : 'Home-grown status needs a scan of the game first (press Scan Game).';
     }
   }
 
