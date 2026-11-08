@@ -1,0 +1,215 @@
+# Tactic Board — Squad Fit Finder
+
+## FM27 Plus app (reads the game directly — no export)
+
+`dist\FM27Plus.exe` is this same tool wrapped in a small Windows app that reads
+your **open Football Manager 27 save straight out of the game's memory**, so
+there is no CSV export step. Start FM27, load your save, then double-click
+`FM27Plus.exe`. (FM26 is still supported since the layout is identical, but the
+latest changes were only tested on FM27; if both games are running it reads the
+newest one that has a save loaded. The older `FM26Plus.exe` is the FM26-only
+build and can be deleted.) It scans the whole database (~130k players) in about 3 seconds
+and loads your squad into every tab (Squad Depth, Tactical Fit, Tactic Advisor,
+Team Info, Youngsters, Potential, Player Search, Financial) automatically. The *Scouting Pool* panel pulls a
+filtered shortlist from the **entire database** (age, potential, position,
+nation...) and ranks it against your tactic; *Scan Game* refreshes everything
+(press it again after loading a different save or advancing the game).
+
+**Scouting Pool filters:** age, potential (PA), current ability (CA), position,
+nation, **min / max transfer value (£M)**, and **Exclude players who need a work
+permit**. The permit check is by nationality, for a club in *your club's*
+country: his own nationality or any of his secondary nationalities (the ones
+the game lists on the Personal tab) must give free movement - UK + Ireland for
+an English club, EU/EEA/Switzerland for a club in those areas, otherwise only
+the club's own country. The game's real approval uses a points system and can
+differ, so treat it as a guide; rows that fail the check are tagged "permit".
+
+**Player interest in my club** (Any / Interested / Slightly interested or better /
+Doubtful or better) keeps the shortlist realistic for your club. The game's own
+interest rule is private (its Player Database has a similar control with
+Interested / Persuadable / Doubtful), so this is an *estimate from reputations*:
+nobody whose world reputation is more than ~100 above your club's is ever
+interested (the game's lists stop at exactly that ceiling), and below it the
+level depends on whether his current club is clearly smaller than yours
+(interested), about level (slightly interested), or a small step above
+(doubtful); free agents are interested. Club "stature" is the average reputation
+of a club's 18 best players, since the game stores a club reputation for only
+about half the clubs. Rows that aren't plain "interested" are tagged. The
+thresholds are constants at the top of `fm26mem/interest.py` if you want to tune
+them.
+
+**Max players:** leave it blank (the default) and the pool loads **every player
+that matches your filters** - about 12,500 with the default age ≤ 24 / potential
+≥ 120 - best potential first. Type a number to load only that many. Either way
+the pool never holds more than 40,000 players (`POOL_CEILING` in `server.py`);
+if more match, the status line says "40,000 of N matching players loaded" and the
+fix is to tighten a filter. The Scouting tab ranks the pool against your tactic
+only while you are looking at it (about 1 s for 12,500 players, about 3 s for
+40,000), so editing your tactic on the other tabs stays instant. Each position's
+table starts with the best 200 and has **Show 200 more / Show 1,000 more**
+buttons; the filters at the top of the tab (search, max age, min fit, min
+potential) apply to the whole ranked pool at once.
+
+**Hide injured players:** on the Squad Depth, Tactical Fit and Tactic Advisor tabs a
+"Hide injured players (n injured)" box leaves injured players out of the depth chart,
+the suggested XI and the position tables (the next best player steps up); untick it
+and they all come back. With it unticked, injured players are marked with a red
+"Injured" tag (hover it for the injury). Injuries are read from two places in the
+game's memory and merged - the Medical Centre's "Current Injuries" list (injuries
+older than about a week) plus the newer injury records (the last week or so; the game
+keeps those elsewhere) - and checked against the Medical Centre: 6 of 6 and 4 of 4 in
+the tests. A scan takes about 3 seconds longer because of it, and it refreshes
+whenever you press *Scan Game*. Only your **first team** is covered: injured U21 / U18
+players, and other clubs' players, are not detected (they read as fit).
+
+**Position order:** every page that lists positions (Squad Depth, Best XI,
+Tactical Fit, Potential, Scouting, the Position Fit selector) shows them
+goalkeeper first, then back to front and left to right - defenders, wing-backs
+and defensive mids, midfielders, attacking mids, strikers - whatever order you
+clicked them in. (Who is *picked* for each slot still follows the order the
+slots were added, so the suggestions themselves don't change.)
+
+**It keeps working whatever the game is doing.** A scan can catch the game in the
+middle of something, so it retries by itself, and a failed rescan never throws
+away your last good data. Retired players (the game wipes their player ID),
+unused slots and any stale duplicate copy of a player are ignored - the live
+copy is picked by checking which one its contract points back at. If you have
+managed more than one club in a save, a *Squad club* selector appears. The
+window connects on its own when the game starts or restarts.
+
+What you get that an export doesn't have: real **Current/Potential Ability
+(0-200)**, all **hidden attributes** (Consistency, Important Matches,
+Versatility, Injury Proneness, Ambition, Professionalism, ...), exact transfer
+value, wage and contract expiry, and every player in the game — not just a
+visible list. The Potential tab uses the real PA as the ceiling.
+
+Notes:
+- It is strictly **read-only**: it opens the game process with read access only
+  and never writes to it or to your save. Use it for single-player saves.
+- Nothing leaves your machine. The app serves the UI on `127.0.0.1:47027`
+  and opens it in an Edge/Chrome app window; closing the window quits it.
+- "Your squad" = whoever the database says is at your club *right now*: each
+  player's current club is his loan club if he is on loan, otherwise the club
+  that holds his contract (no contract = free agent). So players you sold,
+  released or never signed (e.g. turned-down youth-intake prospects) drop out
+  as soon as you rescan. Players on loan *to* you stay in (they can play, but
+  are never offered as sellable); your own players loaned out are left out
+  unless you tick *Include my players on loan elsewhere*. The game's old
+  "human club" flag is deliberately not used for this: it never clears when a
+  player leaves. Players with no club at all (free agents and the engine's
+  pre-generated youth prospects) are hidden from the pool unless you tick
+  *Include unattached players*.
+- If Windows SmartScreen / Defender warns about the unsigned exe, that's
+  expected for any program that reads another process's memory.
+- If FM runs as administrator, run `FM27Plus.exe` as administrator too.
+- Log file for troubleshooting: `%LOCALAPPDATA%\FM27Plus\log.txt`.
+- Opening `index.html` directly still works as before with CSV imports.
+
+**FM27 vs FM26:** the player record layout is identical (checked against the
+game's own player screens: every attribute, feet, height, value, wage, expiry,
+age, position, squad sizes). Differences that are handled: the game date
+is the newest "last updated" stamp (in a fresh save only your own squad has
+been stamped), ~600 unused page slots (tag `0xFFFFFFFF`) are skipped, and a
+retired player keeps his record but his player ID becomes `0xFFFFFFFF`.
+
+**After a game update** the in-memory layout can move. `fm26mem/layout.py`
+holds every offset (record size, attribute block, CA/PA, name pointers, ...)
+and the scanner validates them on every scan; if something no longer fits it
+says "layout not recognised" instead of showing wrong data. The scan finds the
+player pages structurally (the same engine vtable repeating every 968 bytes),
+so only the offsets in `layout.py` ever need re-calibrating.
+
+To rebuild the exe: `build_exe.bat` (needs Python 3 with `numpy` and
+`pyinstaller`: `pip install -r requirements.txt`). To run from source: `python server.py`.
+
+---
+
+## What the app shows (tabs)
+
+| Tab | What it does |
+|---|---|
+| **Squad Depth** | Top three players for every slot of your tactic, nobody used twice |
+| **Tactical Fit** | The best XI (an optimal assignment, not a greedy pick), plus the **bench** (reserve keeper first, then the player who covers the most ground) and the **rotation XI** (each slot's second choice), then a ranked table per slot |
+| **Tactic Advisor** | Scores your pitch tactic, every saved formation and eight presets (4-2-3-1, 4-3-3, 4-4-2, 4-1-4-1, 4-3-2-1, 3-5-2, 3-4-3, 5-3-2) by the best XI your squad can field in them. Presets use the roles that suit your squad best; **Use on pitch** loads one |
+| **Team Info** | Squad at a glance: the stars, brightest prospects, who to loan out for minutes, who needs a new contract, surplus players, injuries |
+| **Youngsters** | Everyone 19 / 21 / 23 or under with CA, PA, best roles, current vs potential rating, a growth score and a verdict (*Wonderkid*, *Future star*, *Future starter*, *Squad player*, *Ready now*), and a **future XI** built from them by potential |
+| **Potential** | How good each squad player could become in each slot (PA ceiling, age, growth attributes) |
+| **Player Search** | One player: attributes, a **hidden profile** (personality, hidden attributes, estimated tactical understanding / buy-in), and his best roles in every position |
+| **Financial** | Surplus players by transfer value |
+| **Scouting** | The scouting pool ranked against your tactic, with a *Hidden* column |
+| **World** | The world's best players (by ability) or the next generation (best young potentials) from the whole database, filterable by position / age / nation |
+
+## How the scoring works (FM27)
+
+**Roles are FM27's own.** Every position has an *in-possession* (IP) role and an
+*out-of-possession* (OOP) role, as on the game's tactics screen, so each slot on the pitch
+takes two roles. The role lists and the **Key** / **Preferable** attributes of every one
+of the 79 roles (40 IP + 39 OOP) were read from the game's own player screens
+(Overview, the role list under the pitch, which highlights a role's attributes) - they are
+not guesses. Click a slot and the editor shows the key attributes of the roles you picked;
+they match what the game shows. They live in `ROLE_DATA` at the top of `engine.js`; if a
+game update changes a role, that is the place to fix it.
+
+**Role fit** is the average of the role's *Key* attributes (on the game's 1-20 scale, using
+the exact value - 13.8, not "14"). That was checked against the game's own star ratings
+for the same player: for 20 role lists (6 players, every role at every position they can
+play, in and out of possession) the key-attribute average put the roles in the game's
+order 92-95% of the time and picked a top-rated role every time, while every attribute
+beyond the key ones - preferable ones included - made the match worse. So preferable
+attributes only count as a small tie-breaker (5%), and nothing else is mixed in.
+
+A slot's **rating** is then:
+
+> (50% in-possession fit + 50% out-of-possession fit) x **position familiarity** x
+> footedness x **hidden factors** (x potential, if "Factor in potential" is ticked)
+
+- *Position familiarity* uses the game's own 1-20 position ratings (Natural 20,
+  Accomplished 15-19, Competent 10-14, Unconvincing 5-9, Awkward 2-4, Ineffectual 1): about
+  x1.00 at 20, x0.92 at 15, x0.81 at 10, x0.70 at 5, x0.60 at 1.
+- *Footedness*: wide roles that overlap or cross want the matching foot, inside roles
+  (Inside Forward, Inside Winger, Wide Forward) the other one; worth at most about 7%.
+- **Hidden factors** (toolbar: Off / Low +-5% / **Normal +-10%** / High +-18%). FM27's
+  Tactical Effectiveness is built from player ability, **tactical understanding**,
+  **player buy-in** and more. The game keeps those out of reach of a memory read, so they
+  are *estimated* from the attributes and personality that drive them, each 0-1:
+  understanding (adaptability, decisions, team work, anticipation, concentration), buy-in
+  (professionalism, adaptability, loyalty, temperament, determination), reliability
+  (consistency, important matches, pressure), availability (injury proneness, natural
+  fitness) and discipline (temperament, sportsmanship, dirtiness, controversy). A player
+  whose combined profile is better or worse than an ordinary professional's has his rating
+  moved by up to the chosen strength. Every row shows the effect (e.g. +2.4%); hover it
+  for the five estimates. Note the personality byte order is partly inferred (Ambition,
+  Loyalty, Professionalism and Controversy are confirmed against the game's labels).
+- The **Best XI** is a true best-value assignment (Hungarian algorithm), so the first slot
+  can no longer take a player who is worth more somewhere else.
+
+The "Hide unfamiliar-position players" box removes anyone rated below Competent (under 10)
+for the slot. **Auto-pick roles** sets every slot to the in- and out-of-possession roles
+that suit your squad's best players for it.
+
+## Extending it
+
+- Roles and their attributes: `ROLE_DATA` / `ROLE_LISTS` at the top of `engine.js`.
+- Rating mix and penalties: `PREF_WEIGHT`, `familiarityPenalty`, `HIDDEN_STRENGTH` and
+  `hiddenProfile` in `engine.js`; formation presets: `PRESET_FORMATIONS`.
+- Everything on screen: `app.js` / `index.html` / `styles.css`. `roles-data.js` is a leftover
+  from the first version and is no longer used.
+
+## CSV import (without the app)
+
+Opening `index.html` directly still works with FM CSV exports (a squad view with the
+attribute columns). Players imported that way have no real 1-20 position ratings (position
+text is used instead), and no World tab; everything else works the same.
+
+## Files
+
+| File | What it does |
+|---|---|
+| `server.py` | The local app: serves the page and a small JSON API over the game's memory |
+| `fm26mem/` | The read-only memory reader (`layout.py` has every offset) |
+| `index.html` | Page structure |
+| `styles.css` | All visual styling |
+| `engine.js` | Roles, scoring, familiarity, hidden factors, XI assignment, bench, formation comparison (no DOM) |
+| `app.js` | Wires the engine to the page - pitch, tabs, rendering |
+| `memory-bridge.js` | Talks to the app's API and converts players for the engine |
+| `build_exe.bat` | Builds `dist\FM27Plus.exe` |

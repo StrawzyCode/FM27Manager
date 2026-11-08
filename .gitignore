@@ -1,0 +1,7 @@
+# Build output (rebuild with build_exe.bat)
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc

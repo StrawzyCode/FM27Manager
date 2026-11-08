@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FM27 Plus — Tactical Fit & Squad Depth</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div class="app-container">
+    <!-- SIDEBAR: TACTIC BUILDER & IMPORT -->
+    <aside class="sidebar" aria-label="Tactical Pitch Builder & Squad Data">
+      
+      <!-- LIVE DATA PANEL (only shown when running as the FM27 Plus app) -->
+      <section class="panel" id="livePanel" hidden>
+        <div class="panel-head">
+          <h2 id="liveTitle">1. Live Game Data</h2>
+          <button type="button" class="btn btn-sm btn-primary" id="liveScanBtn">Scan Game</button>
+        </div>
+        <div id="liveStatus" class="live-status"></div>
+        <label class="filter-toggle" style="margin:8px 0" title="Players who belong to your club but are currently playing for another club. They can't play for you right now, so they're left out unless you tick this.">
+          <input type="checkbox" id="liveLoanedOut"> Include my players on loan elsewhere
+        </label>
+        <div id="liveClubRow" class="hint" style="margin:6px 0" hidden title="You've managed more than one club in this save, so the game still marks players at each of them. Pick the club whose squad you want to analyse.">
+          Squad club: <select id="liveClub" style="margin-left:6px"></select>
+        </div>
+        <p class="hint" id="liveHint">Reads your open save straight from Football Manager's memory. Your squad is whoever's current club is yours right now. It only ever reads &mdash; nothing is written to the game.</p>
+      </section>
+
+      <!-- SQUAD IMPORT PANEL -->
+      <section class="panel csv-only">
+        <div class="panel-head">
+          <h2>1. Import Squad</h2>
+        </div>
+        <div class="file-drop" id="fileDrop">
+          <p>Drag & drop your FM CSV export here</p>
+          <p class="sub">or <label for="csvInput" class="file-drop-link">browse file</label></p>
+          <input type="file" id="csvInput" accept=".csv, .rtf, .txt" hidden>
+        </div>
+        <div id="importStatus" class="import-status"></div>
+      </section>
+
+      <!-- SCOUTING POOL (live data): the whole database, filtered -->
+      <section class="panel" id="poolPanel" hidden>
+        <div class="panel-head">
+          <h2>Scouting Pool</h2>
+          <button type="button" class="btn btn-sm btn-primary" id="poolLoadBtn">Load Pool</button>
+        </div>
+        <p class="hint">Pull a shortlist from the <strong>entire database</strong> to rank against your tactic. The best matches by potential are loaded first.</p>
+        <div class="pool-grid">
+          <div class="form-group-inline"><label for="poolMinAge">Min age</label><input type="number" id="poolMinAge" min="14" max="45" placeholder="Any"></div>
+          <div class="form-group-inline"><label for="poolMaxAge">Max age</label><input type="number" id="poolMaxAge" min="14" max="45" value="24"></div>
+          <div class="form-group-inline"><label for="poolMinPA">Min potential (PA)</label><input type="number" id="poolMinPA" min="0" max="200" value="120"></div>
+          <div class="form-group-inline"><label for="poolMinCA">Min current (CA)</label><input type="number" id="poolMinCA" min="0" max="200" placeholder="Any"></div>
+          <div class="form-group-inline"><label for="poolPosition">Position</label>
+            <select id="poolPosition">
+              <option value="">Any</option><option value="GK">GK</option><option value="DL">D (L)</option><option value="DC">D (C)</option><option value="DR">D (R)</option>
+              <option value="WBL">WB (L)</option><option value="WBR">WB (R)</option><option value="DM">DM</option><option value="ML">M (L)</option><option value="MC">M (C)</option>
+              <option value="MR">M (R)</option><option value="AML">AM (L)</option><option value="AMC">AM (C)</option><option value="AMR">AM (R)</option><option value="ST">ST</option>
+            </select></div>
+          <div class="form-group-inline"><label for="poolNation">Nation</label><input type="text" id="poolNation" placeholder="e.g. France"></div>
+          <div class="form-group-inline"><label for="poolMinValue">Min value (£M)</label><input type="number" id="poolMinValue" min="0" step="0.1" placeholder="Any"></div>
+          <div class="form-group-inline"><label for="poolMaxValue">Max value (£M)</label><input type="number" id="poolMaxValue" min="0" step="0.1" placeholder="Any"></div>
+          <div class="form-group-inline"><label for="poolLimit">Max players</label><input type="number" id="poolLimit" min="100" max="40000" placeholder="All" title="Leave blank to load every player that matches the filters (the best potentials first; up to 40,000)."></div>
+          <div class="form-group-inline"><label for="poolInterest">Player interest in my club</label>
+            <select id="poolInterest" title="Estimated from reputations, so the shortlist is realistic for your club: stars above your club's level and players at much bigger clubs drop out.">
+              <option value="">Any</option>
+              <option value="3">Interested</option>
+              <option value="2">Slightly interested (or better)</option>
+              <option value="1">Doubtful (or better)</option>
+            </select></div>
+        </div>
+        <div class="hint" id="poolInterestNote" style="margin:-2px 0 8px"></div>
+        <label class="filter-toggle" style="margin-bottom:8px" id="poolPermitLabel" title="Hides players who would need a work permit to join your club. This is a nationality check: his own or any secondary nationality must give free movement into your club's country. The game's real approval can differ.">
+          <input type="checkbox" id="poolNoPermit"> Exclude players who need a work permit
+        </label>
+        <div class="hint" id="poolPermitNote" style="margin:-4px 0 8px 22px"></div>
+        <label class="filter-toggle" style="margin-bottom:8px" title="Includes free agents and the engine's pre-generated youth prospects that aren't attached to any club yet.">
+          <input type="checkbox" id="poolUnattached"> Include unattached players (no club)
+        </label>
+        <div id="poolStatus" class="import-status"></div>
+      </section>
+
+      <!-- SCOUTING IMPORT PANEL -->
+      <section class="panel csv-only">
+        <div class="panel-head">
+          <h2>Scouting Import</h2>
+        </div>
+        <p class="hint">Upload a scouting shortlist/search results export (same FM CSV format) to rank those players against your tactic — kept completely separate from your first-team squad.</p>
+        <div class="file-drop" id="scoutFileDrop">
+          <p>Drag & drop your scouting CSV export here</p>
+          <p class="sub">or <label for="scoutCsvInput" class="file-drop-link">browse file</label></p>
+          <input type="file" id="scoutCsvInput" accept=".csv, .rtf, .txt" hidden>
+        </div>
+        <div id="scoutImportStatus" class="import-status"></div>
+      </section>
+
+      <!-- 5x5 INTERACTIVE FM PITCH BUILDER -->
+      <section class="panel">
+        <div class="panel-head">
+          <h2>2. Pitch Tactic Grid</h2>
+          <span style="display:flex;gap:6px"><button type="button" class="btn btn-sm" id="autoRolesBtn" title="Picks, for every slot, the in- and out-of-possession role that suits your squad's best players for that position.">Auto-pick roles</button><button type="button" class="btn btn-sm" id="clearTacticBtn">Clear Pitch</button></span>
+        </div>
+        <p class="hint">Click <strong>+</strong> on any pitch cell to add a position. Click an active slot to pick its in-possession and out-of-possession roles, as on the game's tactics screen.</p>
+        
+        <div class="pitch-container">
+          <div class="pitch-lines">
+            <div class="penalty-box top"></div>
+            <div class="center-circle"></div>
+            <div class="penalty-box bottom"></div>
+          </div>
+          <div id="fmPitchGrid" class="fm-pitch-grid"></div>
+        </div>
+
+        <div class="save-formation-row">
+          <input type="text" id="formationNameInput" placeholder="Formation name…" maxlength="60">
+          <button type="button" class="btn btn-sm btn-primary" id="saveFormationBtn">Save Formation</button>
+        </div>
+        <div class="saved-formations-row">
+          <select id="savedFormationsSelect">
+            <option value="">— Saved formations —</option>
+          </select>
+          <button type="button" class="btn btn-sm" id="loadFormationBtn">Load</button>
+          <button type="button" class="btn btn-sm btn-danger" id="deleteFormationBtn">Delete</button>
+        </div>
+        <div id="formationSaveStatus" class="import-status"></div>
+      </section>
+
+      <!-- SLOT EDITOR PANEL -->
+      <section class="panel" id="slotEditor" hidden>
+        <div class="panel-head">
+          <h2 id="editorTitle">Edit Position Slot</h2>
+          <button type="button" class="btn btn-danger btn-sm" id="removeSlotBtn">Remove</button>
+        </div>
+        
+        <div class="form-group">
+          <label for="editorPosition">Position</label>
+          <select id="editorPosition" disabled></select>
+        </div>
+
+        <div class="form-group">
+          <label for="editorRole">In-possession role</label>
+          <select id="editorRole"></select>
+        </div>
+
+        <div class="form-group">
+          <label for="editorOopRole">Out-of-possession role</label>
+          <select id="editorOopRole"></select>
+        </div>
+        <p class="hint" id="editorKeyAttrs" style="margin:4px 0 0"></p>
+      </section>
+
+    </aside>
+
+    <!-- MAIN RESULTS & ANALYSIS -->
+    <main class="results" aria-label="Results">
+
+      <div class="results-head">
+        <div class="tab-nav" role="tablist">
+          <button type="button" class="tab-btn active" id="tabBtnSquadDepth" role="tab" aria-selected="true">Squad Depth</button>
+          <button type="button" class="tab-btn" id="tabBtnTacticalFit" role="tab" aria-selected="false">Tactical Fit</button>
+          <button type="button" class="tab-btn" id="tabBtnTactics" role="tab" aria-selected="false">Tactic Advisor</button>
+          <button type="button" class="tab-btn" id="tabBtnTeamInfo" role="tab" aria-selected="false">Team Info</button>
+          <button type="button" class="tab-btn" id="tabBtnYoungsters" role="tab" aria-selected="false">Youngsters</button>
+          <button type="button" class="tab-btn" id="tabBtnPotential" role="tab" aria-selected="false">Potential</button>
+          <button type="button" class="tab-btn" id="tabBtnPlayerSearch" role="tab" aria-selected="false">Player Search</button>
+          <button type="button" class="tab-btn" id="tabBtnFinancial" role="tab" aria-selected="false">Financial</button>
+          <button type="button" class="tab-btn" id="tabBtnScouting" role="tab" aria-selected="false">Scouting</button>
+          <button type="button" class="tab-btn" id="tabBtnWorld" role="tab" aria-selected="false">World</button>
+        </div>
+        <label class="filter-toggle">
+          <input type="checkbox" id="relatedOnlyToggle">
+          Hide unfamiliar-position players
+        </label>
+        <label class="filter-toggle">
+          <input type="checkbox" id="potentialToggle">
+          Factor in potential
+        </label>
+        <label class="filter-toggle" title="How strongly a player's hidden profile moves his rating: consistency, important matches, pressure, adaptability, professionalism, temperament, injury proneness... (estimates of FM27's Tactical Understanding, Player Buy-In and reliability - the game doesn't let a memory read see those). Normal = up to +/-10%.">
+          Hidden factors
+          <select id="hiddenSelect">
+            <option value="off">Off</option>
+            <option value="low">Low (±5%)</option>
+            <option value="normal" selected>Normal (±10%)</option>
+            <option value="high">High (±18%)</option>
+          </select>
+        </label>
+        <label class="filter-toggle" id="hideInjuredLabel" hidden title="Leaves injured players out of the Squad Depth and Tactical Fit lists; untick it to bring them back. Uses the first-team injury list the Medical Centre shows (U21/U18 injuries aren't included).">
+          <input type="checkbox" id="hideInjuredToggle">
+          Hide injured players<span id="hideInjuredCount"></span>
+        </label>
+      </div>
+
+      <div id="emptyState" class="empty-state">
+        <p>Import a squad CSV export and select pitch positions to generate depth charts and optimal role rankings.</p>
+      </div>
+
+      <!-- TAB 1: SQUAD DEPTH -->
+      <div id="tabSquadDepth" class="tab-panel">
+        <div id="squadDepthPanel" class="panel" hidden>
+          <div class="panel-head">
+            <h2>Squad Depth Chart</h2>
+          </div>
+          <p class="hint">Top 3 optimal choices for each active slot with zero repeated players across positions.</p>
+          
+          <div id="depthSummaryGrid" class="depth-summary-grid"></div>
+
+          <div class="table-wrap">
+            <table class="squad-depth-table" id="squadDepthTable"></table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: TACTICAL FIT -->
+      <div id="tabTacticalFit" class="tab-panel" hidden>
+        <div id="bestXiPanel" class="panel" hidden>
+          <div class="panel-head">
+            <h2>Suggested XI Lineup</h2>
+          </div>
+          <p class="hint">Globally optimized XI assignment maximizing overall tactical role ratings.</p>
+          <div class="table-wrap">
+            <table class="results-table" id="bestXiTable"></table>
+          </div>
+        </div>
+
+        <div id="benchPanel" class="panel" hidden>
+          <div class="panel-head">
+            <h2>Bench &amp; Rotation</h2>
+          </div>
+          <p class="hint">The nine players who cover the most ground behind your XI (a reserve keeper first, then one cover per area), and the rotation XI - each position's second choice.</p>
+          <div id="benchBody"></div>
+        </div>
+
+        <div id="slotPanels"></div>
+      </div>
+
+      <!-- TAB: TACTIC ADVISOR -->
+      <div id="tabTactics" class="tab-panel" hidden>
+        <div id="tacticsBody"></div>
+      </div>
+
+      <!-- TAB: TEAM INFO -->
+      <div id="tabTeamInfo" class="tab-panel" hidden>
+        <div id="teamInfoBody"></div>
+      </div>
+
+      <!-- TAB: YOUNGSTERS -->
+      <div id="tabYoungsters" class="tab-panel" hidden>
+        <div id="youngstersBody"></div>
+      </div>
+
+      <!-- TAB: POTENTIAL -->
+      <div id="tabPotential" class="tab-panel" hidden>
+        <div id="potentialInfoPanel" class="panel" hidden>
+          <div class="panel-head">
+            <h2>Squad Potential</h2>
+          </div>
+          <p class="hint">For each active tactic slot, every squad player scored 0-100 on how good they could become in that exact role — blending their scouted Potential rating, current attribute fit, age headroom, and any growth-related hidden attributes (Determination, Professionalism, Adaptability, Consistency, Ambition, Important Matches, Versatility, Injury Proneness) your export includes. Missing columns are skipped, not guessed at.</p>
+        </div>
+        <div id="potentialPanels"></div>
+      </div>
+
+      <!-- TAB: PLAYER SEARCH -->
+      <div id="tabPlayerSearch" class="tab-panel" hidden>
+        <div id="playerSearchEmptyState" class="empty-state">
+          <p>Import a squad CSV export to search your players.</p>
+        </div>
+        <div id="playerSearchPanel" class="panel" hidden>
+          <div class="panel-head">
+            <h2>Search Squad</h2>
+          </div>
+          <input type="text" id="playerSearchInput" placeholder="Search player name…">
+          <div id="playerSearchResults" class="player-search-results"></div>
+        </div>
+        <div id="playerOverviewPanels"></div>
+      </div>
+
+      <!-- TAB: FINANCIAL -->
+      <div id="tabFinancial" class="tab-panel" hidden>
+        <div id="financialInfoPanel" class="panel" hidden>
+          <div class="panel-head">
+            <h2>Sell List — Surplus Value</h2>
+          </div>
+          <p class="hint">Squad players who aren't the 1st or 2nd choice (starter or backup) for any active position on your Squad Depth chart, ranked by transfer value — the highest-value players you could realistically move on. Needs a "Transfer Value" or "Value" column in your import; with no active tactic slots, nobody is protected yet so the whole valued squad is listed.</p>
+        </div>
+        <div id="financialEmptyState" class="empty-state">
+          <p>Import a squad CSV export to see sellable players.</p>
+        </div>
+        <div id="financialTableWrap" class="table-wrap panel" hidden>
+          <table class="results-table" id="financialTable"></table>
+        </div>
+      </div>
+
+      <!-- TAB: WORLD -->
+      <div id="tabWorld" class="tab-panel" hidden>
+        <div id="worldBody"></div>
+      </div>
+
+      <!-- TAB 3: SCOUTING -->
+      <div id="tabScouting" class="tab-panel" hidden>
+        <div id="scoutingEmptyState" class="empty-state">
+          <p>Import a scouting CSV export on the left to see how those players fit your tactic.</p>
+        </div>
+        <div id="scoutingFiltersBar" class="scouting-filters panel" hidden>
+          <div class="form-group-inline">
+            <label for="scoutSearchInput">Search</label>
+            <input type="text" id="scoutSearchInput" placeholder="Player name…">
+          </div>
+          <div class="form-group-inline">
+            <label for="scoutMaxAgeInput">Max age</label>
+            <input type="number" id="scoutMaxAgeInput" min="14" max="45" placeholder="Any">
+          </div>
+          <div class="form-group-inline">
+            <label for="scoutMinScoreInput">Min current fit</label>
+            <input type="number" id="scoutMinScoreInput" min="0" max="100" placeholder="Any">
+          </div>
+          <div class="form-group-inline">
+            <label for="scoutMinPotentialInput">Min potential</label>
+            <input type="number" id="scoutMinPotentialInput" min="0" max="100" placeholder="Any">
+          </div>
+          <button type="button" class="btn btn-sm" id="scoutClearFiltersBtn">Clear Filters</button>
+        </div>
+        <div id="scoutingPanels"></div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+  <script src="memory-bridge.js"></script>
+</body>
+</html>
