@@ -36,7 +36,7 @@ OFF_NAME_LAST = 0x198
 OFF_NAME_COMMON = 0x1A0
 OFF_NATION = 0x1A8                        # u64 ptr -> nation object (+8 id, +0x18 -> name)
 OFF_PERSONALITY = 0x1B0                   # 8 x u8, 1..20
-OFF_RELATIONS = 0x1B8                     # u64 ptr -> [begin, end) vector of 16-byte (ptr, flags[8]) entries (history; not used)
+OFF_RELATIONS = 0x1B8                     # u64 ptr -> [begin, end) vector of 16-byte relation entries (see REL_*)
 OFF_DOB = 0x1C8                           # u16 day-of-year, u16 year
 OFF_CONTRACT = 0x1E8                      # u64 ptr -> contract object; null when the player has no club
 OFF_LOAN = 0x1F0                          # u64 ptr -> loan slot; slot+0x00 -> loan agreement (null when not on loan)
@@ -56,7 +56,6 @@ CONTRACT_EXPIRY = 0x48
 CLUB_ID = 0x08
 CLUB_NATION = 0xD8                        # club -> nation of the football association it plays under (+0xE8 = where it is)
 CLUB_REPUTATION = 0x168                   # u16, 0..10000 (Fulham 7150, Real Madrid 9750) - but 0 for ~half the clubs (Bayern, Ajax...)
-REL_SECONDARY_NATIONALITY = (0x08, 0x09)  # relation type bytes: entry points at a nation = "Secondary Nationalities"
 CLUB_NAME_FULL = 0xC0
 CLUB_NAME_SHORT = 0xC8
 NATION_ID = 0x08
@@ -90,25 +89,25 @@ INJ_CASE_DATE = 0x18
 INJ_CASE_DAYS = 0x20
 INJ_CASE_PERSON = 0x68
 
-# --- career history (for home-grown status) - NOT CALIBRATED YET ---------------------------------------
-# Home-grown status ("trained in nation (15-21)" etc.) is worked out from the clubs a player was registered
-# with, season by season, which the game keeps as his career history. Where that list lives in memory has
-# not been located yet (it needs the live game - see CALIBRATION.md). Until HISTORY_PATH is filled in the
-# home-grown filter says it is unavailable instead of guessing.
-#   HISTORY_PATH        offsets of the pointer hops from the record start to a vector header [begin, end)
-#                       e.g. (0x2A8,) = record+0x2A8 holds the header address; () = the header is in the record
-#   HISTORY_HEADER      offset of `begin` in the header (`end` follows 8 bytes later)
-#   HISTORY_ENTRY_SIZE  bytes per season entry
-#   HISTORY_ENTRY_YEAR  u16 year the season started
-#   HISTORY_ENTRY_CLUB  u64 pointer to the club object he was at
-#   HISTORY_ENTRY_LOAN  u8, non-zero for a loan spell (None if the entry has no such flag)
-HISTORY_PATH = None
-HISTORY_HEADER = 0x00
-HISTORY_ENTRY_SIZE = None
-HISTORY_ENTRY_YEAR = None
-HISTORY_ENTRY_CLUB = None
-HISTORY_ENTRY_LOAN = None
-HISTORY_MAX_ENTRIES = 64
+# --- relation list (record + OFF_RELATIONS) ------------------------------------------------------------
+# Each player has a vector of 16-byte entries tying him to nations, clubs and people:
+#   +0x00 u64 pointer to the nation / club / person,  +0x0A, +0x0B two type bytes,  +0x0C a value byte.
+# Checked against the game's Personal -> Eligibility screen (Kuningas, Ekangamene, Darwich, 26/12/2026):
+# every row there is one of these entries, in the same order.
+REL_ENTRY_SIZE = 16
+REL_PTR = 0x00
+REL_TYPE = (0x0A, 0x0B)
+REL_VALUE = 0x0C
+REL_SECONDARY_NATIONALITY = (0x08, 0x09)  # -> a nation: "Secondary Nationalities" on the Personal screen
+REL_HOME_GROWN_NATION = (0x08, 0x46)      # -> a nation: a "Nation Eligibility" row ("Nation Trained In")
+REL_HOME_GROWN_CLUB = (0x01, 0x48)        # -> a club: a "Club Eligibility" row ("Club Trained In")
+# The value byte of a home-grown entry is its eligibility type. A player gets one entry per type he meets,
+# and only the strongest of the two common ones: 15-21 (which covers 0-21 too) or 0-21 alone.
+HG_15_21 = 1                              # "Homegrown 15-21"
+HG_0_21 = 2                               # "Homegrown 0-21"
+# Other values belong to particular countries' rules; their label depends on the nation (3 reads "Homegrown
+# 0-23 or Belgian" for Belgium but "Homegrown 15-21" for Lebanon, 10 is England's "Homegrown 0-19 (1 year)")
+# and they are not used.
 
 # --- the 54 attribute bytes, in memory order ------------------------------------
 LEFT_FOOT = '_LeftFoot'

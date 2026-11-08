@@ -163,7 +163,7 @@ def _parse_lenstr(b):
 
 
 DATE_SUPPORT = 10            # players that must share a date stamp before it can be "today"
-MAX_REL_ENTRIES = 32         # relation entries read per player (secondary nationalities are listed first)
+MAX_REL_ENTRIES = 32         # relation entries read per player in the batched read (the few longer lists are read whole)
 
 # Where a player stands relative to the human manager's club (see resolve_membership)
 ST_NONE, ST_CURRENT, ST_LOAN_IN, ST_LOAN_OUT, ST_GONE = 0, 1, 2, 3, 4
@@ -171,14 +171,20 @@ ST_LABELS = {ST_NONE: '', ST_CURRENT: 'current', ST_LOAN_IN: 'loan_in', ST_LOAN_
 
 INTEREST_MODES = ('tl', 'transfer', 'loan', 'none')
 
-# Home-grown rules as the game names them: (club or nation, from age, to age, seasons needed). "Trained in
-# nation (15-21)" = registered with clubs in that nation for 3 seasons (36 months) between 15 and 21.
+# Home-grown rules as the game's Player Search names them: (nation or club, eligibility types that count).
+# They are read from the game's own eligibility list (layout.REL_HOME_GROWN_*), the one its Personal ->
+# Eligibility screen shows. A player trained 15-21 only gets the 15-21 entry, so the 0-21 rules accept both.
 HOME_GROWN_RULES = {
-    'nation15': ('nation', 15, 21, 3),
-    'club15': ('club', 15, 21, 3),
-    'nation0': ('nation', 0, 21, 3),
-    'club0': ('club', 0, 21, 3),
+    'nation15': ('nation', (L.HG_15_21,)),
+    'club15': ('club', (L.HG_15_21,)),
+    'nation0': ('nation', (L.HG_15_21, L.HG_0_21)),
+    'club0': ('club', (L.HG_15_21, L.HG_0_21)),
 }
+
+
+def _rel_type(pair):
+    """The two relation type bytes as one number (layout.REL_TYPE order)."""
+    return (pair[0] << 8) | pair[1]
 
 
 class Snapshot:
@@ -208,8 +214,7 @@ class Snapshot:
         self._stature = None                  # lazily computed: (per-player club stature, {club: stature}, rank in club)
         self._interest = None                 # lazily computed: (transfer, loan) interest in joining the human club
         self._months_left = None              # lazily computed: months left on each contract
-        self._history = None                  # lazily read: career history (home-grown status), once calibrated
-        self._club_nation = {}                # club object pointer -> nation name
+        self._home_grown = None               # lazily read: eligibility entries (see home_grown_entries)
         self._injuries = None                 # lazily computed: {player index: injury} for the first team
         self.home_rep = 0                     # the human club's stored reputation (0 = not stored)
         self._decode()
@@ -495,34 +500,75 @@ class Snapshot:
         i['loaned_out'] = counts['loan_out']
         i['left'] = counts['moved']
 
-    # ------------------------------------------------------ work permits
-    def secondary_nations(self, k=4):
-        """(n, k) nation pointers from each player's 'Secondary Nationalities' (0 = none).
+    # ------------------------------------------------------ relation list
+    def _read_relations(self, k_secondary=4):
+        """One pass over every player's relation list (layout.REL_*), kept in two compact forms:
+        `_secondary` = (n, 4) secondary-nationality nation pointers, `_home_grown` = the eligibility entries.
 
-        They are relation-list entries whose type bytes are 0x0809 and whose pointer is a nation.
-        Read for the whole database on first use (~0.7 s) and cached for this scan."""
-        if self._secondary is not None:
-            return self._secondary
-        n = self.n
+        The lists are read in one batch of MAX_REL_ENTRIES entries per player (~0.7 s for the database);
+        the few players with longer lists (14 of 111k in the KäPa save) are then read whole."""
+        n, k, size = self.n, MAX_REL_ENTRIES, L.REL_ENTRY_SIZE
         cont, cok = gather(self.proc, self.ptr_relations, 16)
         begin = np.ascontiguousarray(cont[:, :8]).view('<u8').ravel()
         end = np.ascontiguousarray(cont[:, 8:16]).view('<u8').ravel()
         span = end.astype(np.int64) - begin.astype(np.int64)
-        cnt = np.where(cok & (span >= 16) & (span <= 400 * 16), span // 16, 0)
-        begin = np.where(cnt > 0, begin, 0).astype(np.uint64)
-        buf, _ = gather(self.proc, begin, MAX_REL_ENTRIES * 16)
-        ent = buf.reshape(n, MAX_REL_ENTRIES, 16)
-        in_range = np.arange(MAX_REL_ENTRIES)[None, :] < np.minimum(cnt, MAX_REL_ENTRIES)[:, None]
-        t_hi, t_lo = L.REL_SECONDARY_NATIONALITY
-        is_sec = in_range & (ent[:, :, 10] == t_hi) & (ent[:, :, 11] == t_lo)
-        ptrs = np.ascontiguousarray(ent[:, :, :8]).view('<u8').reshape(n, MAX_REL_ENTRIES)
-        rank = np.cumsum(is_sec, axis=1)
-        out = np.zeros((n, k), dtype=np.uint64)
-        for j in range(k):
-            out[:, j] = (ptrs * (is_sec & (rank == j + 1))).sum(axis=1)
-        self._secondary = out
-        return out
+        cnt = np.where(cok & self.valid & (span >= size) & (span <= 400 * size), span // size, 0)
+        buf, _ = gather(self.proc, np.where(cnt > 0, begin, 0).astype(np.uint64), k * size)
+        ent = buf.reshape(n, k, size)
+        player, pos = np.nonzero(np.arange(k)[None, :] < np.minimum(cnt, k)[:, None])   # player order, then list order
+        rows = ent[player, pos]
+        for i in np.flatnonzero(cnt > k).tolist():
+            raw = self.proc.read_bytes(int(begin[i]) + k * size, int(cnt[i] - k) * size)
+            if raw and len(raw) == (cnt[i] - k) * size:
+                extra = np.frombuffer(raw, dtype=np.uint8).reshape(-1, size)
+                rows = np.concatenate([rows, extra])
+                player = np.concatenate([player, np.full(len(extra), i)])
+                pos = np.concatenate([pos, np.arange(k, k + len(extra))])
+        order = np.lexsort((pos, player))
+        rows, player = rows[order], player[order]
+        p = L.REL_PTR
+        ptr = np.ascontiguousarray(rows[:, p:p + 8]).view('<u8').ravel()
+        hi, lo = L.REL_TYPE
+        typ = (rows[:, hi].astype(np.int32) << 8) | rows[:, lo]
+        value = rows[:, L.REL_VALUE].astype(np.int32)
 
+        sec = typ == _rel_type(L.REL_SECONDARY_NATIONALITY)
+        sp, sv = player[sec], ptr[sec]
+        starts = np.r_[0, np.flatnonzero(sp[1:] != sp[:-1]) + 1] if len(sp) else np.zeros(0, dtype=np.int64)
+        rank = np.arange(len(sp)) - np.repeat(starts, np.diff(np.r_[starts, len(sp)])) if len(sp) else sp
+        keep = rank < k_secondary
+        self._secondary = np.zeros((n, k_secondary), dtype=np.uint64)
+        self._secondary[sp[keep], rank[keep]] = sv[keep]
+
+        is_club = typ == _rel_type(L.REL_HOME_GROWN_CLUB)
+        hg = is_club | (typ == _rel_type(L.REL_HOME_GROWN_NATION))
+        player, ptr, is_club, value = player[hg], ptr[hg], is_club[hg], value[hg]
+        # The game also lists a club eligibility under the club's country (a youth-intake player who only has
+        # "KäPa 0-21" shows "Finland 0-21" too), so each entry carries the nation it counts for.
+        clubs = np.unique(ptr[is_club]).tolist()
+        got = self.batch.fetch(clubs, L.CLUB_NATION + 8)
+        club_nation = {c: int.from_bytes(got[c][L.CLUB_NATION:L.CLUB_NATION + 8], 'little') if c in got else 0 for c in clubs}
+        nation = ptr.copy()
+        if len(clubs):
+            nation[is_club] = np.array([club_nation[int(c)] for c in ptr[is_club].tolist()], dtype=np.uint64)
+        self._home_grown = (player, ptr, is_club, value, nation)
+
+    def secondary_nations(self):
+        """(n, 4) nation pointers from each player's 'Secondary Nationalities' (0 = none). Cached for this scan."""
+        if self._secondary is None:
+            self._read_relations()
+        return self._secondary
+
+    def home_grown_entries(self):
+        """(player, ptr, is_club, type, nation): one row per home-grown eligibility the game stores for a player -
+        the nation or club he was trained in, the eligibility type (layout.HG_*) and the nation it counts for
+        (the club's country for a club). These are the "Fully Eligible" rows of the game's Eligibility screen;
+        the rows it shows with a day count ("243/1095 days") are still in progress and not stored. Cached."""
+        if self._home_grown is None:
+            self._read_relations()
+        return self._home_grown
+
+    # ------------------------------------------------------ work permits
     def permit_needed(self):
         """bool[n] - would the player need a work permit at the human club? (None if no club.)
 
@@ -595,80 +641,33 @@ class Snapshot:
 
     # ------------------------------------------------------- home-grown status
     def home_grown_ready(self):
-        """True once the career-history layout is known (layout.HISTORY_*), so home-grown rules can be read."""
-        return L.HISTORY_PATH is not None and L.HISTORY_ENTRY_SIZE and L.HISTORY_ENTRY_YEAR is not None \
-            and L.HISTORY_ENTRY_CLUB is not None
-
-    def career_history(self):
-        """(year, club, loan, count): (n, HISTORY_MAX_ENTRIES) arrays of each player's season entries plus how
-        many he has; None until the layout is calibrated. Read for the whole database once per scan."""
-        if self._history is not None or not self.home_grown_ready():
-            return self._history
-        n, k, size = self.n, L.HISTORY_MAX_ENTRIES, L.HISTORY_ENTRY_SIZE
-        rec = self.addrs.astype(np.uint64)
-        hdr = rec
-        for hop in L.HISTORY_PATH:                     # follow the pointer chain to the vector header
-            rows, ok = gather(self.proc, hdr + np.uint64(hop), 8)
-            hdr = np.where(ok, np.ascontiguousarray(rows).view('<u8').ravel(), 0).astype(np.uint64)
-        if not L.HISTORY_PATH:
-            hdr = rec + np.uint64(L.HISTORY_HEADER)
-        else:
-            hdr = np.where(hdr != 0, hdr + np.uint64(L.HISTORY_HEADER), 0).astype(np.uint64)
-        rows, ok = gather(self.proc, hdr, 16)
-        begin = np.ascontiguousarray(rows[:, :8]).view('<u8').ravel()
-        end = np.ascontiguousarray(rows[:, 8:]).view('<u8').ravel()
-        span = end.astype(np.int64) - begin.astype(np.int64)
-        count = np.where(ok & (span > 0) & (span % size == 0), np.minimum(span // size, k), 0)
-        buf, _ = gather(self.proc, np.where(count > 0, begin, 0).astype(np.uint64), k * size)
-        ent = buf.reshape(n, k, size)
-        live = np.arange(k)[None, :] < count[:, None]
-        y = L.HISTORY_ENTRY_YEAR
-        year = np.where(live, ent[:, :, y].astype(np.int32) | (ent[:, :, y + 1].astype(np.int32) << 8), 0)
-        c = L.HISTORY_ENTRY_CLUB
-        club = np.where(live, np.ascontiguousarray(ent[:, :, c:c + 8]).view('<u8').reshape(n, k), 0).astype(np.uint64)
-        loan = (ent[:, :, L.HISTORY_ENTRY_LOAN] != 0) & live if L.HISTORY_ENTRY_LOAN is not None else np.zeros((n, k), bool)
-        self._history = (year, club, loan, count)
-        return self._history
-
-    def club_nations(self, ptrs):
-        """{club object pointer: nation name of the association it plays under}, cached."""
-        todo = sorted({int(p) for p in ptrs if int(p)} - set(self._club_nation))
-        if todo:
-            got = self.batch.fetch(todo, L.CLUB_NATION + 8)
-            for p in todo:
-                b = got.get(p)
-                nat = int.from_bytes(b[L.CLUB_NATION:L.CLUB_NATION + 8], 'little') if b else 0
-                self._club_nation[p] = self.nation_table.get(nat, '')
-        return {int(p): self._club_nation.get(int(p), '') for p in ptrs if int(p)}
+        """Home-grown status is read straight from the game's eligibility list, so it is always available."""
+        return True
 
     def home_grown(self, rule, nation=None):
-        """bool[n]: does each player meet a home-grown rule (HOME_GROWN_RULES), e.g. ('nation15', 'Finland') =
-        registered with clubs in Finland for at least 3 seasons between his 15th and 21st birthdays? Club rules
-        are about the human club (a loan spell elsewhere doesn't count for it). None if it can't be read."""
+        """bool[n]: does each player meet a home-grown rule (HOME_GROWN_RULES)? E.g. ('nation15', 'Finland') =
+        the game lists him as "Homegrown 15-21", fully eligible, for Finland under Nation Eligibility (stored
+        for the nation, or for a Finnish club). Club rules are about the human club. None if the rule needs a
+        nation or club that isn't there; an unknown nation matches nobody."""
         spec = HOME_GROWN_RULES.get(rule)
-        hist = self.career_history()
-        if spec is None or hist is None:
+        if spec is None:
             return None
-        scope, lo, hi, seasons = spec
-        year, club, loan, _count = hist
+        scope, types = spec
+        player, ptr, is_club, typ, entry_nation = self.home_grown_entries()
+        hit = np.isin(typ, types)
         if scope == 'club':
             if not self.home_club_ptr:
                 return None
-            hit = (club == np.uint64(self.home_club_ptr)) & ~loan
+            hit &= is_club & (ptr == np.uint64(self.home_club_ptr))
         else:
-            if not nation:
+            if not nation or not nation.strip():
                 return None
-            names = self.club_nations(np.unique(club[club != 0]).tolist())
             want = nation.strip().lower()
-            ptrs = np.array([p for p, nm in names.items() if nm.lower() == want], dtype=np.uint64)
-            hit = np.isin(club, ptrs)
-        age = year - self.dob_year[:, None]                 # his age in the year the season started
-        hit &= (year > 0) & (age >= lo) & (age < hi)
-        # distinct qualifying seasons (two spells in one season count once)
-        yrs = np.where(hit, year, 0)
-        yrs.sort(axis=1)
-        distinct = ((yrs[:, 1:] != yrs[:, :-1]) & (yrs[:, 1:] > 0)).sum(axis=1) + (yrs[:, 0] > 0)
-        return distinct >= seasons
+            ptrs = np.array([p for p, nm in self.nation_table.items() if nm and nm.lower() == want], dtype=np.uint64)
+            hit &= np.isin(entry_nation, ptrs)
+        out = np.zeros(self.n, dtype=bool)
+        out[player[hit]] = True
+        return out
 
     # ------------------------------------------------------------ injuries
     def injuries(self, report=None):
@@ -950,7 +949,7 @@ class Snapshot:
         Player Interest filter: 'tl' (a transfer or a loan), 'transfer', 'loan' at interest_level or keener
         (3 = interested, 2 = persuadable or better, 1 = doubtful or better), or 'none' (neither);
         home_grown = (rule, nation name[, negate]) keeps players who meet (or, negated, don't meet) that
-        home-grown rule (see home_grown()); ignored while the career history can't be read."""
+        home-grown rule (see home_grown()); ignored when the rule can't be applied (no nation given, no club)."""
         m = self.valid.copy()
         if interest_mode in INTEREST_MODES:
             lv = self.interest_levels()

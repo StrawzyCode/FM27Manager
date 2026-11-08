@@ -52,49 +52,22 @@ If players are missing from the **squad itself** (not just their injuries), open
 `/api/debug/squad`: `not_in_squad` lists players the game still flags as yours who aren't counted, with
 the contract / loan club pointers. Compare `counts` with the squad size FM shows.
 
-## 2. Home-grown status: find the career history
+## 2. Home-grown status: done (read from the game's eligibility list)
 
-`fm26mem/layout.py` has `HISTORY_PATH = None` and the other `HISTORY_*` constants unset, so the
-home-grown filter is disabled. `Snapshot.career_history()` in `reader.py` expects:
+**Found 08/11/2026 (game date 26/12/2026).** There is no need for the career history: the game keeps each
+player's home-grown status itself, as entries in his relation list (record + `0x1B8`, the list that also
+holds secondary nationalities). Type bytes `08 46` = a nation, `01 48` = a club, and the value byte is the
+eligibility type: 1 = "Homegrown 15-21", 2 = "Homegrown 0-21", other values are country-specific rules.
+These are exactly the *Fully Eligible* rows of the game's *Personal → Eligibility* screen, in the same order;
+a club row also counts for the club's country there, and rows still in progress ("243/1095 days") are
+worked out on the fly and not stored. Checked on that screen for Kuningas, Ekangamene, Darwich,
+Voutilainen, Ahola and Pirinen, and against the squad's HGN tags (67 of 69; the other two, Ahola and
+Pessi Lähteenmäki, are still in progress). `HOME_GROWN_RULES` in `reader.py` maps the filter's rules onto
+these types (the 0-21 rules also accept 15-21 rows, since a player only gets the stronger of the two).
 
-- a pointer chain from the player record (`HISTORY_PATH`, e.g. `(0x2A8,)`) to a vector header
-  `[begin, end)` at `HISTORY_HEADER`;
-- fixed-size season entries (`HISTORY_ENTRY_SIZE`) holding a u16 season year (`HISTORY_ENTRY_YEAR`), a
-  club object pointer (`HISTORY_ENTRY_CLUB`) and, if there is one, a loan flag byte (`HISTORY_ENTRY_LOAN`).
-
-To find it: pick a few players whose career history FM shows (Profile → History), e.g. one who has
-been at 3+ clubs. Club object pointers are known (`Snapshot.club_ptr` / `contract_club_ptr`, names via
-`club_names()`). For each 8-byte slot of the 968-byte record that holds a heap pointer, follow it one or
-two hops and look for a `[begin, end, capacity]` triple whose entries contain those clubs' pointers next
-to year-like u16 values (1990-2030) in the order FM shows. Check the same offsets on several players,
-then fill in the constants. If the history isn't a plain vector (a linked list, a separate table keyed
-by player ID...), adapt `career_history()`. It just has to return `(year, club, loan, count)` arrays.
-
-Then check the rule against FM's own *Home-Grown Status* filter (Player Search → filter
-*Home-Grown Status Is Trained in nation (15-21) Finland*): same players? `HOME_GROWN_RULES` in
-`reader.py` uses "3 distinct seasons with the player aged 15-20 at the start of the season's year".
-Calendar-year leagues (Finland) and Aug-May leagues may need the age taken at the season start.
-Also check that loan spells count for the nation rule and not the club rule.
-
-**Checked 08/11/2026: not found yet.** Ground truth: Mikko Kuningas (ID 33058923, born 30/07/1997) has 18
-rows under Career → Career Stats: PEPO 2012-14, FC Lahti 2015-17 (plus FC Lahti Akatemia "no longer
-exists" in 2015 and 2016), FC Inter 2018-19, FC Lahti 2020, Orange County 2021-22, FC Lahti 2023, KäPa 2024,
-Crema 2024/25, KäPa 2025-26; apps 19 / 2 / 0 for PEPO 2014 / 2013 / 2012. What was ruled out:
-- every pointer in his record, followed 3 hops with vectors read in full, for club pointers *or* club
-  IDs (u32 at club + 0x08: PEPO 13755, FC Lahti 483, FC Inter 6513, Orange County 12410, Crema 15182) next
-  to a season year. The only hits are the relations list (+0x1B8: favourite / disliked clubs, no years),
-  the contract and club objects;
-- all 49 places that point at his person object, and all 54 references to the Orange County / Crema
-  objects: none have 2021/22 or 2024/25 nearby (except +0x248, the previous club);
-- fixed-stride runs of 2012/2013/2014 anywhere in memory near his record, person or those clubs.
-
-So the history is probably a separate table keyed by player ID (or holds clubs another way, e.g. by
-team object, since a defunct club is listed). Next: search for the u32 ID 33058923 next to year / apps
-values (2014 + 19 apps + 7 goals).
-
-Also: FM's *Inf* column shows **HGN** for every KäPa player whose column isn't taken by another tag
-(Wnt, Lst, Yth, Inj), including 15- and 16-year-old intake players such as Mico Lottonen (15). Three
-seasons aged 15-20 can't produce that, so check FM's actual rule before trusting `HOME_GROWN_RULES`.
+Still to check: whether the game's own Player Search filter *Home-Grown Status Is Trained in nation (0-21)*
+also lists players who only have a 15-21 row (e.g. Mikko Kuningas for Finland). The app assumes it does.
+If the game's filter is literal, change `nation0` / `club0` in `HOME_GROWN_RULES` to `(L.HG_0_21,)`.
 
 ## 3. Player interest: tune the estimate against the game's lists
 

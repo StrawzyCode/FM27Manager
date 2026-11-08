@@ -45,12 +45,15 @@ is an **estimate**, not a value read from the game:
 Every threshold is a constant at the top of `fm26mem/interest.py`. They have **not** been checked against
 the game's own Player Interest lists yet - see `CALIBRATION.md`.
 
-**Home-grown status** (the *If Home-Grown Status Is / Is not ...* row): *Trained in nation (15-21)* means
-at least 3 seasons registered with clubs in that nation between his 15th and 21st birthdays (loan spells
-count), *Trained at club (15-21)* the same at your club (loan spells elsewhere don't), plus the *(0-21)*
-versions. It is worked out from each player's career history, and **where the game keeps that history in
-memory hasn't been located yet** (it needs the live game - see `CALIBRATION.md`). Until it is, the row is
-greyed out and says so instead of guessing.
+**Home-grown status** (the *If Home-Grown Status Is / Is not ...* row) is **read from the game**, not
+worked out: it is the list the game shows on a player's *Personal → Eligibility* screen (*Nation
+Eligibility* / *Club Eligibility*), which it keeps with each player. *Trained in nation (15-21)* = he is
+listed "Homegrown 15-21" and *Fully Eligible* for that nation, *Trained at club (15-21)* = the same for your
+club, plus the *(0-21)* versions, which also accept the 15-21 rows. As on that screen, a club row also
+counts for the club's country (a youth-intake player listed "KäPa 0-21" is Finland 0-21), and rows still in
+progress ("243/1095 days") don't count yet. Checked against the game's Eligibility screen for eight
+players, and against the HGN tags in the KäPa squad. Country-specific types (Belgium's "0-23 or Belgian",
+England's "0-19 (1 year)", ...) are not offered.
 
 **Max players:** leave it blank (the default) and the pool loads **every player
 that matches your filters** - about 12,500 with the default age ≤ 24 / potential
