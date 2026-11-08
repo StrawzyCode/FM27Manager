@@ -63,15 +63,39 @@
           <div class="form-group-inline"><label for="poolMinValue">Min value (£M)</label><input type="number" id="poolMinValue" min="0" step="0.1" placeholder="Any"></div>
           <div class="form-group-inline"><label for="poolMaxValue">Max value (£M)</label><input type="number" id="poolMaxValue" min="0" step="0.1" placeholder="Any"></div>
           <div class="form-group-inline"><label for="poolLimit">Max players</label><input type="number" id="poolLimit" min="100" max="40000" placeholder="All" title="Leave blank to load every player that matches the filters (the best potentials first; up to 40,000)."></div>
-          <div class="form-group-inline"><label for="poolInterest">Player interest in my club</label>
-            <select id="poolInterest" title="Estimated from reputations, so the shortlist is realistic for your club: stars above your club's level and players at much bigger clubs drop out.">
-              <option value="">Any</option>
-              <option value="3">Interested</option>
-              <option value="2">Slightly interested (or better)</option>
-              <option value="1">Doubtful (or better)</option>
-            </select></div>
         </div>
+
+        <!-- Player interest, laid out like the game's own Player Interest filter -->
+        <fieldset class="interest-box" id="poolInterestBox">
+          <legend>Player interest in my club</legend>
+          <label class="interest-opt" title="Don't filter on interest."><input type="radio" name="poolInterestMode" value="" checked> Any</label>
+          <label class="interest-opt" title="Would join you on a permanent transfer or on a loan (whichever he is keener on)."><input type="radio" name="poolInterestMode" value="tl"> Transfer or loan</label>
+          <label class="interest-opt" title="Would join you on a permanent transfer."><input type="radio" name="poolInterestMode" value="transfer"> Transfer only</label>
+          <label class="interest-opt" title="Would join you on loan. Free agents and players already out on loan can't be loaned."><input type="radio" name="poolInterestMode" value="loan"> Loan only</label>
+          <label class="interest-opt" title="Wouldn't consider joining you on a transfer or on a loan."><input type="radio" name="poolInterestMode" value="none"> Not considered</label>
+          <div class="interest-levels" id="poolInterestLevels" hidden title="Each level includes the keener ones: Persuadable also lists the Interested players, Doubtful lists everyone who'd consider it.">
+            <label><input type="radio" name="poolInterestLevel" value="3" checked> Interested</label>
+            <label><input type="radio" name="poolInterestLevel" value="2"> Persuadable</label>
+            <label><input type="radio" name="poolInterestLevel" value="1"> Doubtful</label>
+          </div>
+        </fieldset>
         <div class="hint" id="poolInterestNote" style="margin:-2px 0 8px"></div>
+
+        <!-- Home-grown status, like the game's "If Home-Grown Status Is ..." filter row -->
+        <div class="hg-row" id="poolHgRow">
+          <input type="checkbox" id="poolHgOn" title="Filter on home-grown status">
+          <span class="hg-if">If</span><span class="hg-field">Home-Grown Status</span>
+          <select id="poolHgOp" aria-label="Is or is not"><option value="is">Is</option><option value="not">Is not</option></select>
+          <select id="poolHgRule" aria-label="Home-grown rule">
+            <option value="nation15">Trained in nation (15-21)</option>
+            <option value="club15">Trained at club (15-21)</option>
+            <option value="nation0">Trained in nation (0-21)</option>
+            <option value="club0">Trained at club (0-21)</option>
+          </select>
+          <input type="text" id="poolHgNation" list="poolNationList" placeholder="Nation, e.g. Finland" aria-label="Nation">
+          <datalist id="poolNationList"></datalist>
+        </div>
+        <div class="hint" id="poolHgNote" style="margin:-2px 0 8px"></div>
         <label class="filter-toggle" style="margin-bottom:8px" id="poolPermitLabel" title="Hides players who would need a work permit to join your club. This is a nationality check: his own or any secondary nationality must give free movement into your club's country. The game's real approval can differ.">
           <input type="checkbox" id="poolNoPermit"> Exclude players who need a work permit
         </label>

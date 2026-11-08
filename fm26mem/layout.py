@@ -90,6 +90,26 @@ INJ_CASE_DATE = 0x18
 INJ_CASE_DAYS = 0x20
 INJ_CASE_PERSON = 0x68
 
+# --- career history (for home-grown status) - NOT CALIBRATED YET ---------------------------------------
+# Home-grown status ("trained in nation (15-21)" etc.) is worked out from the clubs a player was registered
+# with, season by season, which the game keeps as his career history. Where that list lives in memory has
+# not been located yet (it needs the live game - see CALIBRATION.md). Until HISTORY_PATH is filled in the
+# home-grown filter says it is unavailable instead of guessing.
+#   HISTORY_PATH        offsets of the pointer hops from the record start to a vector header [begin, end)
+#                       e.g. (0x2A8,) = record+0x2A8 holds the header address; () = the header is in the record
+#   HISTORY_HEADER      offset of `begin` in the header (`end` follows 8 bytes later)
+#   HISTORY_ENTRY_SIZE  bytes per season entry
+#   HISTORY_ENTRY_YEAR  u16 year the season started
+#   HISTORY_ENTRY_CLUB  u64 pointer to the club object he was at
+#   HISTORY_ENTRY_LOAN  u8, non-zero for a loan spell (None if the entry has no such flag)
+HISTORY_PATH = None
+HISTORY_HEADER = 0x00
+HISTORY_ENTRY_SIZE = None
+HISTORY_ENTRY_YEAR = None
+HISTORY_ENTRY_CLUB = None
+HISTORY_ENTRY_LOAN = None
+HISTORY_MAX_ENTRIES = 64
+
 # --- the 54 attribute bytes, in memory order ------------------------------------
 LEFT_FOOT = '_LeftFoot'
 RIGHT_FOOT = '_RightFoot'

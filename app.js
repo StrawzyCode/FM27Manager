@@ -811,6 +811,18 @@
       </div>`;
   }
 
+  // Estimated interest in joining your club: one tag for a transfer, one for a loan (live data only).
+  const INTEREST_CLASS = { 'Interested': 'int-3', 'Persuadable': 'int-2', 'Doubtful': 'int-1', 'Not interested': 'int-0', 'Not possible': 'int-x' };
+  function interestTagsHtml(p) {
+    const t = p.raw['Interest'];
+    const l = p.raw['Loan Interest'];
+    if (!t && !l) return '<span style="color:var(--muted-2)">—</span>';
+    const tag = (kind, letter, v) => v
+      ? `<span class="int-tag ${INTEREST_CLASS[v] || 'int-x'}" title="${kind}: ${v.toLowerCase()} (estimate)">${letter} ${esc(v === 'Not interested' ? 'no' : (v === 'Not possible' ? 'n/a' : v.toLowerCase()))}</span>`
+      : '';
+    return tag('Transfer', 'T', t) + tag('Loan', 'L', l);
+  }
+
   // --- Scouting: filters, sorting, and its own scrollable panel ---
 
   function readScoutFilters() {
@@ -867,7 +879,7 @@
     const shown = rows.length > limit ? rows.slice(0, limit) : rows;
     const hasClub = shown.length > 0 && shown[0].player.raw && shown[0].player.raw['Club'] !== undefined;
     const clubCell = (p) => hasClub
-      ? `<td>${p.raw['Club'] || '<span style="color:var(--muted-2)">—</span>'}${p.raw['Nation'] ? ` <span style="color:var(--muted)">· ${p.raw['Nation']}</span>` : ''}${p.raw['Work Permit'] === 'Needed' ? ' <span style="color:var(--muted)" title="Needs a work permit for your club (by nationality)">· permit</span>' : ''}${p.raw['Interest'] && p.raw['Interest'] !== 'Interested' ? ` <span style="color:var(--muted)" title="Estimated interest in joining your club (from reputations)">· ${p.raw['Interest'].toLowerCase()}</span>` : ''}</td><td>${p.raw['Transfer Value'] || '—'}</td>`
+      ? `<td>${p.raw['Club'] || '<span style="color:var(--muted-2)">—</span>'}${p.raw['Nation'] ? ` <span style="color:var(--muted)">· ${p.raw['Nation']}</span>` : ''}${p.raw['Work Permit'] === 'Needed' ? ' <span style="color:var(--muted)" title="Needs a work permit for your club (by nationality)">· permit</span>' : ''}</td><td>${p.raw['Transfer Value'] || '—'}</td><td class="int-cell">${interestTagsHtml(p)}</td>`
       : '';
     const tableRows = shown.map((r, i) => `
       <tr>
@@ -881,7 +893,7 @@
         ${clubCell(r.player)}
       </tr>
     `).join('');
-    const colCount = hasClub ? 9 : 7;
+    const colCount = hasClub ? 10 : 7;
     const countLabel = rows.length > shown.length
       ? `showing top ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}`
       : `${rows.length.toLocaleString()} match${rows.length === 1 ? '' : 'es'}`;
@@ -910,7 +922,7 @@
               <th class="sortable-th" data-sort-field="potential">Potential${sortArrow('potential')}</th>
               <th>Familiarity</th>
               <th>Hidden</th>
-              ${hasClub ? '<th>Club · Nation</th><th>Value</th>' : ''}
+              ${hasClub ? '<th>Club · Nation</th><th>Value</th><th title="Estimated interest in joining your club on a transfer (T) and on a loan (L)">Interest</th>' : ''}
             </tr>
           </thead>
           <tbody>${tableRows || `<tr><td colspan="${colCount}">No matching players found</td></tr>`}</tbody>

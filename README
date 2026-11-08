@@ -24,19 +24,33 @@ an English club, EU/EEA/Switzerland for a club in those areas, otherwise only
 the club's own country. The game's real approval uses a points system and can
 differ, so treat it as a guide; rows that fail the check are tagged "permit".
 
-**Player interest in my club** (Any / Interested / Slightly interested or better /
-Doubtful or better) keeps the shortlist realistic for your club. The game's own
-interest rule is private (its Player Database has a similar control with
-Interested / Persuadable / Doubtful), so this is an *estimate from reputations*:
-nobody whose world reputation is more than ~100 above your club's is ever
-interested (the game's lists stop at exactly that ceiling), and below it the
-level depends on whether his current club is clearly smaller than yours
-(interested), about level (slightly interested), or a small step above
-(doubtful); free agents are interested. Club "stature" is the average reputation
-of a club's 18 best players, since the game stores a club reputation for only
-about half the clubs. Rows that aren't plain "interested" are tagged. The
-thresholds are constants at the top of `fm26mem/interest.py` if you want to tune
-them.
+**Player interest in my club** works like the game's own *Player Interest* filter: pick
+*Transfer or loan*, *Transfer only* or *Loan only* and then *Interested*, *Persuadable* or *Doubtful*
+(each level includes the keener ones), or *Not considered* for players who wouldn't come at all; *Any*
+switches it off. Every player gets two levels, one for a permanent **transfer** and one for a **loan**,
+shown as **T** / **L** tags in the Scouting tab's *Interest* column. The game's rule is private, so this
+is an **estimate**, not a value read from the game:
+- nobody whose world reputation is more than ~100 above your club's is ever interested (the game's lists
+  stop at exactly that ceiling - the one part measured against the game);
+- below that, the base level is how big his club is compared with yours (club "stature" = the average
+  reputation of a club's 18 best players, since the game stores a club reputation for only about half the
+  clubs), and it moves one level up or down for: whether he'd walk into your XI while not being a regular
+  at his club, being one of his club's five best players, ambition, loyalty, a contract with six months or
+  less left, and your club being in his own country;
+- loans use looser thresholds (a season at a smaller club for games is an easy sell), go up for players
+  outside their club's best 11 who'd be in your squad, down for key players, players who wouldn't make your
+  best 22 and players over 28, and are impossible for free agents and players already out on loan; free
+  agents are always interested in a transfer.
+
+Every threshold is a constant at the top of `fm26mem/interest.py`. They have **not** been checked against
+the game's own Player Interest lists yet - see `CALIBRATION.md`.
+
+**Home-grown status** (the *If Home-Grown Status Is / Is not ...* row): *Trained in nation (15-21)* means
+at least 3 seasons registered with clubs in that nation between his 15th and 21st birthdays (loan spells
+count), *Trained at club (15-21)* the same at your club (loan spells elsewhere don't), plus the *(0-21)*
+versions. It is worked out from each player's career history, and **where the game keeps that history in
+memory hasn't been located yet** (it needs the live game - see `CALIBRATION.md`). Until it is, the row is
+greyed out and says so instead of guessing.
 
 **Max players:** leave it blank (the default) and the pool loads **every player
 that matches your filters** - about 12,500 with the default age ≤ 24 / potential
@@ -57,10 +71,16 @@ and they all come back. With it unticked, injured players are marked with a red
 "Injured" tag (hover it for the injury). Injuries are read from two places in the
 game's memory and merged - the Medical Centre's "Current Injuries" list (injuries
 older than about a week) plus the newer injury records (the last week or so; the game
-keeps those elsewhere) - and checked against the Medical Centre: 6 of 6 and 4 of 4 in
-the tests. A scan takes about 3 seconds longer because of it, and it refreshes
+keeps those elsewhere). The Medical Centre list is found from the entries that carry its
+usual marker values and is then **read in full**, so an injury whose entry looks different
+(a filled-in date, say) is no longer missed as long as it sits in the same list - the old
+reader only counted entries with the exact marker. The original version was checked against
+the Medical Centre (6 of 6 and 4 of 4); the full-list read has only been tested on synthetic
+data so far. A scan takes about 3 seconds longer because of it, and it refreshes
 whenever you press *Scan Game*. Only your **first team** is covered: injured U21 / U18
 players, and other clubs' players, are not detected (they read as fit).
+`http://127.0.0.1:47027/api/debug/injuries` shows exactly what was found (every list entry,
+every recent injury record and why it was or wasn't counted), to compare with the Medical Centre.
 
 **Position order:** every page that lists positions (Squad Depth, Best XI,
 Tactical Fit, Potential, Scouting, the Position Fit selector) shows them
@@ -99,10 +119,19 @@ Notes:
   player leaves. Players with no club at all (free agents and the engine's
   pre-generated youth prospects) are hidden from the pool unless you tick
   *Include unattached players*.
+- **Closing the window closes the app** - and nothing else does. The page says goodbye as it
+  closes; a reload or a second window carries on. Earlier versions quit when the window hadn't
+  checked in for 25 seconds, but Edge / Chrome slow a minimised or covered window (a full-screen
+  Football Manager) to about one check-in a minute, so the app quit while you were playing and
+  every request from the window then failed ("Failed to fetch") until it was reopened. Now a quiet
+  window only ends the app if it went quiet while it was visible (a crashed browser), after 8 hours
+  of silence, or 75 seconds after its goodbye. If the app does stop, the window says so plainly.
 - If Windows SmartScreen / Defender warns about the unsigned exe, that's
   expected for any program that reads another process's memory.
 - If FM runs as administrator, run `FM27Plus.exe` as administrator too.
 - Log file for troubleshooting: `%LOCALAPPDATA%\FM27Plus\log.txt`.
+- Diagnostics: `/api/debug/injuries` (above) and `/api/debug/squad` (players the game still
+  marks as yours who aren't counted in the squad, with the club each one is at now).
 - Opening `index.html` directly still works as before with CSV imports.
 
 **FM27 vs FM26:** the player record layout is identical (checked against the
@@ -213,3 +242,5 @@ text is used instead), and no World tab; everything else works the same.
 | `app.js` | Wires the engine to the page - pitch, tabs, rendering |
 | `memory-bridge.js` | Talks to the app's API and converts players for the engine |
 | `build_exe.bat` | Builds `dist\FM27Plus.exe` |
+| `tests/` | A synthetic FM process (`fakefm.py`) so the reader and the app run without the game: `python tests/test_reader.py`, `python tests/run_fake_server.py` |
+| `CALIBRATION.md` | What still has to be checked against the live game (injuries, home-grown status, interest) |

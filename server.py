@@ -44,6 +44,8 @@ class State:
         self.last_scan_at = None
         self.last_ping = time.time()
         self.seen_ui = False
+        self.bye_at = None                  # the page said it was closing (it may just be reloading)
+        self.ping_visible = False           # was the window on screen at the last ping?
         self.club_override = None           # club pointer picked in the UI (None = automatic)
 
 
@@ -101,6 +103,14 @@ def meta_payload():
     }
 
 
+def home_grown_filter(q):
+    """(rule, nation, negate) from the pool query's home-grown row, or None when it is switched off."""
+    rule = q.get('hgRule', [None])[0]
+    if not rule:
+        return None
+    return rule, (q.get('hgNation', [''])[0] or '').strip(), q.get('hgNot', ['0'])[0] == '1'
+
+
 def _num(q, key, cast=int):
     v = q.get(key, [None])[0]
     if v in (None, ''):
@@ -144,7 +154,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(path.lstrip('/'))
             if path == '/api/ping':
                 STATE.last_ping = time.time()
+                STATE.ping_visible = q.get('visible', ['0'])[0] == '1'
                 STATE.seen_ui = True
+                return self._json({'ok': True})
+            if path == '/api/bye':                # sent by the page as it closes (or reloads - see watchdog)
+                STATE.bye_at = time.time()
                 return self._json({'ok': True})
             if path == '/api/status':
                 return self._json(status_payload())
@@ -193,7 +207,9 @@ class Handler(BaseHTTPRequestHandler):
                         min_value=None if min_value is None else round(min_value * 1_000_000),
                         max_value=None if max_value is None else round(max_value * 1_000_000),
                         exclude_permit=q.get('excludePermit', ['0'])[0] == '1',
-                        min_interest=_num(q, 'interest'),
+                        interest_mode=q.get('interestMode', [None])[0] or None,
+                        interest_level=_num(q, 'interest'),
+                        home_grown=home_grown_filter(q),
                         limit=10 ** 9)
                     if not unattached:       # many of the top potentials are the engine's unassigned youth prospects
                         idx = idx[snap.club_ptr[idx] != 0]
@@ -213,6 +229,24 @@ class Handler(BaseHTTPRequestHandler):
                     idx = idx[snap.club_ptr[idx] != 0][:limit]       # players attached to a club
                     players = players_payload(idx)
                 return self._json({'players': players})
+            if path == '/api/debug/injuries':    # what the injury reader found, to check against the Medical Centre
+                with STATE.lock:
+                    report = {}
+                    snap.injuries(report=report)
+                return self._json(report)
+            if path == '/api/debug/squad':       # players the game still marks as yours who aren't counted in the squad
+                with STATE.lock:
+                    from fm26mem.reader import ST_GONE
+                    idx = np.flatnonzero((snap.squad_status == ST_GONE) & snap.valid)
+                    snap.enrich(idx)
+                    gone = [{'name': snap.names[i], 'age': int(snap.age[i]), 'club': snap.player(int(i), with_attrs=False)['club'],
+                             'contract': bool(snap.ptr_contract[i]), 'contract_club': hex(int(snap.contract_club_ptr[i])),
+                             'loan_club': hex(int(snap.loan_club_ptr[i]))} for i in idx.tolist()]
+                    return self._json({'club': snap.home_club_name, 'club_ptr': hex(snap.home_club_ptr),
+                                       'candidates': snap.home_candidates, 'counts': snap.status_counts(), 'not_in_squad': gone})
+            if path == '/api/nations':           # every nation name in the database, for the filters' suggestions
+                names = sorted({nm for nm in snap.nation_table.values() if nm})
+                return self._json({'nations': names})
             if path == '/api/search':
                 text = (q.get('q', [''])[0] or '').strip()
                 limit = max(1, min(_num(q, 'limit') or 25, 100))
@@ -257,11 +291,36 @@ def open_window(url):
     webbrowser.open(url)
 
 
+# When does the app quit? Only when its window has really gone:
+#  - the page said goodbye (it sends /api/bye as it closes) and no ping followed - a reload sends the
+#    same goodbye but pings again straight away, and a second window keeps pinging; or
+#  - the window was on screen at its last ping and then went quiet for VISIBLE_SILENCE - a visible page
+#    is never throttled, so it has gone (a browser crash, a killed process); or
+#  - nothing at all for IDLE_LIMIT (the same, while the window was hidden, or a page frozen for good).
+# A slow heartbeat on its own never closes the app any more. Edge / Chrome throttle a window that is
+# minimised or covered (by a full-screen Football Manager, say) to about one timer a minute after
+# five minutes, which used to look like a closed window: the app quit while you were playing, and
+# every request from the window then failed until it was reopened.
+CLOSED_GRACE = 75                  # seconds without a ping after a goodbye (covers a throttled 1/min ping)
+VISIBLE_SILENCE = 90               # seconds without a ping after a ping from a visible window
+IDLE_LIMIT = 8 * 3600              # seconds without any ping at all
+
+
 def watchdog():
-    """Exit when the UI window has been closed (no heartbeat for a while)."""
+    last_tick = time.time()
     while True:
         time.sleep(3)
-        if STATE.seen_ui and time.time() - STATE.last_ping > 25:
+        now = time.time()
+        if now - last_tick > 60:           # the PC was asleep: give the page a moment to wake up too
+            STATE.last_ping = now
+        last_tick = now
+        if not STATE.seen_ui:
+            continue
+        if STATE.bye_at and STATE.bye_at >= STATE.last_ping and now - STATE.bye_at > CLOSED_GRACE:
+            os._exit(0)
+        if STATE.ping_visible and now - STATE.last_ping > VISIBLE_SILENCE:
+            os._exit(0)
+        if now - STATE.last_ping > IDLE_LIMIT:
             os._exit(0)
 
 

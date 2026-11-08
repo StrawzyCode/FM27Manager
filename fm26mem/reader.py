@@ -166,6 +166,17 @@ MAX_REL_ENTRIES = 32         # relation entries read per player (secondary natio
 ST_NONE, ST_CURRENT, ST_LOAN_IN, ST_LOAN_OUT, ST_GONE = 0, 1, 2, 3, 4
 ST_LABELS = {ST_NONE: '', ST_CURRENT: 'current', ST_LOAN_IN: 'loan_in', ST_LOAN_OUT: 'loan_out', ST_GONE: 'gone'}
 
+INTEREST_MODES = ('tl', 'transfer', 'loan', 'none')
+
+# Home-grown rules as the game names them: (club or nation, from age, to age, seasons needed). "Trained in
+# nation (15-21)" = registered with clubs in that nation for 3 seasons (36 months) between 15 and 21.
+HOME_GROWN_RULES = {
+    'nation15': ('nation', 15, 21, 3),
+    'club15': ('club', 15, 21, 3),
+    'nation0': ('nation', 0, 21, 3),
+    'club0': ('club', 0, 21, 3),
+}
+
 
 class Snapshot:
     """Everything decoded from one scan of the process."""
@@ -191,8 +202,11 @@ class Snapshot:
         self.home_candidates = []             # [{'ptr', 'name', 'flagged'}] best guesses for "my club"
         self._secondary = None                # lazily read: (n, 4) secondary-nationality pointers
         self._permit = None                   # lazily computed: needs a work permit at the human club?
-        self._stature = None                  # lazily computed: (per-player club stature, {club: stature})
-        self._interest = None                 # lazily computed: estimated interest in joining the human club
+        self._stature = None                  # lazily computed: (per-player club stature, {club: stature}, rank in club)
+        self._interest = None                 # lazily computed: (transfer, loan) interest in joining the human club
+        self._months_left = None              # lazily computed: months left on each contract
+        self._history = None                  # lazily read: career history (home-grown status), once calibrated
+        self._club_nation = {}                # club object pointer -> nation name
         self._injuries = None                 # lazily computed: {player index: injury} for the first team
         self.home_rep = 0                     # the human club's stored reputation (0 = not stored)
         self._decode()
@@ -472,6 +486,7 @@ class Snapshot:
         rep = self.club_reputation()
         i['club_rep'] = rep
         i['interest_rule'] = interest_model.describe(rep)
+        i['home_grown_ready'] = bool(self.home_grown_ready())
         i['squad'] = counts['current'] + counts['loan_in']
         i['loan_in'] = counts['loan_in']
         i['loaned_out'] = counts['loan_out']
@@ -522,7 +537,7 @@ class Snapshot:
 
     # ------------------------------------------------------- player interest
     def stature(self):
-        """(per-player stature of his club, {club pointer: stature}) - see interest.py. Cached."""
+        """(per-player stature of his club, {club pointer: stature}, his rank by CA in that club) - interest.py. Cached."""
         if self._stature is None:
             self._stature = interest_model.club_stature(self.club_ptr, self.ca, self.rep[:, 1], self.valid)
         return self._stature
@@ -539,60 +554,184 @@ class Snapshot:
         k, b = interest_model.REP_FROM_STATURE
         return int(min(10000, max(0, k * s + b)))
 
+    def contract_months_left(self):
+        """float[n]: months until each player's contract ends (NaN = no contract / unknown). Cached."""
+        if self._months_left is not None:
+            return self._months_left
+        size = L.CONTRACT_EXPIRY + 4
+        rows, ok = gather(self.proc, np.where(self.contract_club_ptr != 0, self.ptr_contract, 0).astype(np.uint64), size)
+        day = _u16(rows, L.CONTRACT_EXPIRY).astype(np.int64)
+        year = _u16(rows, L.CONTRACT_EXPIRY + 2).astype(np.int64)
+        good = ok & (year >= 2000) & (year <= 2100) & (day >= 1) & (day <= 366)
+        months = ((year - self.game_year) * 365 + (day - self.game_day)) / 30.44
+        self._months_left = np.where(good, months, np.nan)
+        return self._months_left
+
     def interest_levels(self):
-        """int8[n]: estimated interest in joining the human club (interest.py); None if no club."""
+        """(transfer, loan): int8[n] each - estimated interest in joining the human club on a permanent transfer
+        and on a loan (interest.py: 3 interested, 2 persuadable, 1 doubtful, 0 not; loan -1 = impossible).
+        None if there is no club to compare with."""
         if self._interest is not None:
             return self._interest
         my_rep = self.club_reputation()
         if not my_rep:
             return None
-        per_player, by_club = self.stature()
+        per_player, by_club, rank = self.stature()
         my_stature = by_club.get(self.home_club_ptr)
         if my_stature is None:
             return None
-        self._interest = interest_model.classify(self.rep[:, 2].astype(np.int64), per_player, my_rep, my_stature)
+        squad = self.squad_indices(include_loaned_out=False)
+        self._interest = interest_model.classify(
+            world_rep=self.rep[:, 2].astype(np.int64), stature=per_player, rank=rank, ca=self.ca, age=self.age,
+            ambition=self.personality[:, L.PERSONALITY_ORDER.index('Ambition')].astype(np.int64),
+            loyalty=self.personality[:, L.PERSONALITY_ORDER.index('Loyalty')].astype(np.int64),
+            months_left=self.contract_months_left(), on_loan=self.loan_club_ptr != 0,
+            same_nation=(self.ptr_nation == np.uint64(self.home_nation_ptr)) if self.home_nation_ptr else np.zeros(self.n, bool),
+            my_rep=my_rep, my_stature=my_stature, my_cas=self.ca[squad])
         return self._interest
 
+    # ------------------------------------------------------- home-grown status
+    def home_grown_ready(self):
+        """True once the career-history layout is known (layout.HISTORY_*), so home-grown rules can be read."""
+        return L.HISTORY_PATH is not None and L.HISTORY_ENTRY_SIZE and L.HISTORY_ENTRY_YEAR is not None \
+            and L.HISTORY_ENTRY_CLUB is not None
+
+    def career_history(self):
+        """(year, club, loan, count): (n, HISTORY_MAX_ENTRIES) arrays of each player's season entries plus how
+        many he has; None until the layout is calibrated. Read for the whole database once per scan."""
+        if self._history is not None or not self.home_grown_ready():
+            return self._history
+        n, k, size = self.n, L.HISTORY_MAX_ENTRIES, L.HISTORY_ENTRY_SIZE
+        rec = self.addrs.astype(np.uint64)
+        hdr = rec
+        for hop in L.HISTORY_PATH:                     # follow the pointer chain to the vector header
+            rows, ok = gather(self.proc, hdr + np.uint64(hop), 8)
+            hdr = np.where(ok, np.ascontiguousarray(rows).view('<u8').ravel(), 0).astype(np.uint64)
+        if not L.HISTORY_PATH:
+            hdr = rec + np.uint64(L.HISTORY_HEADER)
+        else:
+            hdr = np.where(hdr != 0, hdr + np.uint64(L.HISTORY_HEADER), 0).astype(np.uint64)
+        rows, ok = gather(self.proc, hdr, 16)
+        begin = np.ascontiguousarray(rows[:, :8]).view('<u8').ravel()
+        end = np.ascontiguousarray(rows[:, 8:]).view('<u8').ravel()
+        span = end.astype(np.int64) - begin.astype(np.int64)
+        count = np.where(ok & (span > 0) & (span % size == 0), np.minimum(span // size, k), 0)
+        buf, _ = gather(self.proc, np.where(count > 0, begin, 0).astype(np.uint64), k * size)
+        ent = buf.reshape(n, k, size)
+        live = np.arange(k)[None, :] < count[:, None]
+        y = L.HISTORY_ENTRY_YEAR
+        year = np.where(live, ent[:, :, y].astype(np.int32) | (ent[:, :, y + 1].astype(np.int32) << 8), 0)
+        c = L.HISTORY_ENTRY_CLUB
+        club = np.where(live, np.ascontiguousarray(ent[:, :, c:c + 8]).view('<u8').reshape(n, k), 0).astype(np.uint64)
+        loan = (ent[:, :, L.HISTORY_ENTRY_LOAN] != 0) & live if L.HISTORY_ENTRY_LOAN is not None else np.zeros((n, k), bool)
+        self._history = (year, club, loan, count)
+        return self._history
+
+    def club_nations(self, ptrs):
+        """{club object pointer: nation name of the association it plays under}, cached."""
+        todo = sorted({int(p) for p in ptrs if int(p)} - set(self._club_nation))
+        if todo:
+            got = self.batch.fetch(todo, L.CLUB_NATION + 8)
+            for p in todo:
+                b = got.get(p)
+                nat = int.from_bytes(b[L.CLUB_NATION:L.CLUB_NATION + 8], 'little') if b else 0
+                self._club_nation[p] = self.nation_table.get(nat, '')
+        return {int(p): self._club_nation.get(int(p), '') for p in ptrs if int(p)}
+
+    def home_grown(self, rule, nation=None):
+        """bool[n]: does each player meet a home-grown rule (HOME_GROWN_RULES), e.g. ('nation15', 'Finland') =
+        registered with clubs in Finland for at least 3 seasons between his 15th and 21st birthdays? Club rules
+        are about the human club (a loan spell elsewhere doesn't count for it). None if it can't be read."""
+        spec = HOME_GROWN_RULES.get(rule)
+        hist = self.career_history()
+        if spec is None or hist is None:
+            return None
+        scope, lo, hi, seasons = spec
+        year, club, loan, _count = hist
+        if scope == 'club':
+            if not self.home_club_ptr:
+                return None
+            hit = (club == np.uint64(self.home_club_ptr)) & ~loan
+        else:
+            if not nation:
+                return None
+            names = self.club_nations(np.unique(club[club != 0]).tolist())
+            want = nation.strip().lower()
+            ptrs = np.array([p for p, nm in names.items() if nm.lower() == want], dtype=np.uint64)
+            hit = np.isin(club, ptrs)
+        age = year - self.dob_year[:, None]                 # his age in the year the season started
+        hit &= (year > 0) & (age >= lo) & (age < hi)
+        # distinct qualifying seasons (two spells in one season count once)
+        yrs = np.where(hit, year, 0)
+        yrs.sort(axis=1)
+        distinct = ((yrs[:, 1:] != yrs[:, :-1]) & (yrs[:, 1:] > 0)).sum(axis=1) + (yrs[:, 0] > 0)
+        return distinct >= seasons
+
     # ------------------------------------------------------------ injuries
-    def injuries(self):
+    def injuries(self, report=None):
         """{player index: injury} for the human club's first-team players who are injured right now.
 
         The game keeps a first-team injury in one of two places (see layout.INJ_*): a list inside its
         medical department object (the longer-running ones, which is what the Medical Centre shows) and,
         for roughly the first week, a separate object per injury. One pass over the process finds both
         (~2 s, cached per scan); the injury's name is read from its type ("A double hernia").
-        U21/U18 injuries are not stored in either, so those players always read as fit."""
-        if self._injuries is not None:
+
+        The department list is found from the entries that carry its fixed marker values, and then read
+        in full: an entry whose marker differs (a filled-in date, say) is still picked up as long as it
+        sits in the same list. U21/U18 injuries are not stored in either place, so those players read as
+        fit. Pass a dict as `report` to get what was found, for checking against the Medical Centre."""
+        if self._injuries is not None and report is None:
             return self._injuries
-        out = {}
+        out, how = {}, {}
         squad = self.squad_indices(include_loaned_out=False)
+        rep = report if report is not None else {}
+        rep.update({'squad': int(len(squad)), 'anchors': 0, 'departments': [], 'list_entries': [], 'cases': []})
         if len(squad):
             persons = self.addrs[squad].astype(np.uint64) + np.uint64(L.PRE)
             who = {int(p): int(i) for p, i in zip(persons, squad)}
             entries, cases = self._injury_scan(persons)
-            vectors = {}                                    # department -> (begin, end) of its entry vectors
+            rep['anchors'] = len(entries)
+            # the department lists those entries belong to: only a vector holding a real current entry counts
+            lists, vectors = {}, {}                          # (begin, end) -> department; department -> its vectors
             for addr, person, itype, owner in entries:
-                i = who.get(person)
-                if i is None or i in out:
-                    continue
                 if owner not in vectors:
                     vectors[owner] = self._entry_vectors(owner)
-                if not any(b <= addr < e and (addr - b) % L.INJ_ENTRY_SIZE == 0 for b, e in vectors[owner]):
-                    continue                                # a stale copy in freed memory, not the live list
-                name = self._injury_name(itype)
-                if name:
-                    out[i] = name
+                for b, e in vectors[owner]:
+                    if b <= addr < e and (addr - b) % L.INJ_ENTRY_SIZE == 0:
+                        lists[(b, e)] = owner
+            for (b, e), owner in sorted(lists.items()):
+                raw = self.proc.read_bytes(b, e - b)
+                if not raw or len(raw) != e - b:
+                    continue
+                rep['departments'].append({'department': hex(owner), 'list': hex(b), 'entries': (e - b) // L.INJ_ENTRY_SIZE})
+                for off in range(0, e - b, L.INJ_ENTRY_SIZE):
+                    ent = raw[off:off + L.INJ_ENTRY_SIZE]
+                    person = int.from_bytes(ent[L.INJ_ENTRY_PERSON:L.INJ_ENTRY_PERSON + 8], 'little')
+                    itype = int.from_bytes(ent[L.INJ_ENTRY_TYPE:L.INJ_ENTRY_TYPE + 8], 'little')
+                    state = int.from_bytes(ent[L.INJ_ENTRY_STATE:L.INJ_ENTRY_STATE + 4], 'little')
+                    i = who.get(person)
+                    name = self._injury_name(itype) if i is not None else ''
+                    if report is not None:
+                        rep['list_entries'].append({'player': self.names[i] if i is not None else None, 'injury': name,
+                                                    'state': hex(state), 'counted': bool(i is not None and name and state != 0xFFFFFFFF)})
+                    if i is None or i in out or state == 0xFFFFFFFF or not name:
+                        continue                            # not one of ours, over, or not an injury entry after all
+                    out[i], how[i] = name, 'list'
             today = self.game_date
             for person, itype, date, days in cases:
                 i = who.get(person)
-                if i is None or i in out or today is None:
+                if i is None or today is None:
                     continue
                 start = _doy_to_date(date & 0x1FF, date >> 16)
-                if start is None or not start <= today < start + datetime.timedelta(days=days):
-                    continue                                # already over (its object stays in memory) or not started
+                current = start is not None and start <= today < start + datetime.timedelta(days=days)
                 name = self._injury_name(itype)
-                if name:
-                    out[i] = name
+                if report is not None:
+                    rep['cases'].append({'player': self.names[i], 'injury': name, 'start': str(start), 'days': days,
+                                         'current': bool(current)})
+                if i in out or not current or not name:
+                    continue                                # already over (its object stays in memory) or not started
+                out[i], how[i] = name, 'recent'
+        rep['injured'] = [{'player': self.names[i], 'injury': nm, 'from': how[i]} for i, nm in out.items()]
         self._injuries = out
         return out
 
@@ -600,8 +739,11 @@ class Snapshot:
         """One pass over the process for both kinds of first-team injury record whose player is one of
         `persons`. Returns (entries, cases): entries = [(address, person, type, department)] from the
         department's list, cases = [(person, type, start date word, planned days)] from the per-injury
-        objects. The fixed marker values are tested first, so most of memory is rejected cheaply."""
-        marker, marker2 = np.uint64(L.INJ_ENTRY_MARKER_VALUE), np.uint64(L.INJ_ENTRY_MARKER2_VALUE)
+        objects. The fixed marker values are tested first, so most of memory is rejected cheaply.
+
+        A list entry is anchored by the u32 0x4FFFF at +0x30 with a date followed by 0xFFFFFFFF just
+        before it (+0x28; normally the empty date 01/01/1900, but any plausible date is accepted)."""
+        marker2 = np.uint64(L.INJ_ENTRY_MARKER2_VALUE)
         m, st, ow = L.INJ_ENTRY_MARKER // 8, L.INJ_ENTRY_STATE // 8, L.INJ_ENTRY_OWNER // 8
         again, cdate, cdays, cwho = (L.INJ_CASE_TYPE_AGAIN // 8, L.INJ_CASE_DATE // 8,
                                      L.INJ_CASE_DAYS // 8, L.INJ_CASE_PERSON // 8)
@@ -621,10 +763,14 @@ class Snapshot:
             a64 = arr[:len(arr) // 8 * 8].view(np.uint64)
             entries, cases = [], []
             lim = len(a64) - ow - 1
-            k = np.flatnonzero(a64[m:lim + m] == marker) + m
+            k = np.flatnonzero(a64[m + 1:lim + m + 1] == marker2) + m      # k = the date slot (+0x28)
             if k.size:
+                d = a64[k]
+                day = d & np.uint64(0xFFFF)
+                year = (d >> np.uint64(16)) & np.uint64(0xFFFF)
+                k = k[((d >> np.uint64(32)) == over) & (day >= 1) & (day <= 366) & (year >= 1900) & (year <= 2100)]
                 e = k - m
-                keep = (a64[k + 1] == marker2) & np.isin(a64[e], persons) & ((a64[e + st] & over) != over)
+                keep = np.isin(a64[e], persons) & ((a64[e + st] & over) != over)
                 entries = [(addr + int(x) * 8, int(a64[x]), int(a64[x + 1]), int(a64[x + ow])) for x in e[keep]]
             n2 = len(a64) - cwho - 1
             c = np.flatnonzero((a64[cdate:cdate + n2] >> np.uint64(32)) == over)      # the date word ends in 0xFFFFFFFF
@@ -763,7 +909,8 @@ class Snapshot:
             'loanFrom': parent if status == ST_LOAN_IN else '',     # a loan-in is another club's player
             'parent': parent,                                        # contract holder while on loan anywhere
             'needsPermit': None if self._permit is None else bool(self._permit[i]),
-            'interest': None if self._interest is None else int(self._interest[i]),
+            'interest': None if self._interest is None else int(self._interest[0][i]),       # on a transfer
+            'loanInterest': None if self._interest is None else int(self._interest[1][i]),   # on a loan (-1 = impossible)
             'ratings': [int(x) for x in self.ratings[i]],
         }
         if self._injuries is not None and status in (ST_CURRENT, ST_LOAN_IN):     # only these are in the first-team list
@@ -789,19 +936,37 @@ class Snapshot:
 
     def query(self, min_age=None, max_age=None, min_pa=None, min_ca=None, exclude_squad=True,
               position=None, nation=None, text=None, limit=2000,
-              min_value=None, max_value=None, exclude_permit=False, min_interest=None, sort='pa'):
+              min_value=None, max_value=None, exclude_permit=False, interest_mode=None, interest_level=None,
+              home_grown=None, sort='pa'):
         """Indices of the best matching players, ranked by potential then current ability
         (sort='ca': by current ability then potential).
 
         min_value / max_value are transfer values in the game's base currency;
         exclude_permit drops players who would need a work permit at the human club;
-        min_interest keeps only players estimated at least this interested in joining it
-        (3 = interested, 2 = slightly interested or better, 1 = doubtful or better)."""
+        interest_mode / interest_level filter on the estimated interest in joining it, like the game's
+        Player Interest filter: 'tl' (a transfer or a loan), 'transfer', 'loan' at interest_level or keener
+        (3 = interested, 2 = persuadable or better, 1 = doubtful or better), or 'none' (neither);
+        home_grown = (rule, nation name[, negate]) keeps players who meet (or, negated, don't meet) that
+        home-grown rule (see home_grown()); ignored while the career history can't be read."""
         m = self.valid.copy()
-        if min_interest:
-            lvl = self.interest_levels()
-            if lvl is not None:
-                m &= lvl >= int(min_interest)
+        if interest_mode in INTEREST_MODES:
+            lv = self.interest_levels()
+            if lv is not None:
+                t, ln = lv
+                need = max(1, min(3, int(interest_level or 1)))
+                if interest_mode == 'tl':
+                    m &= np.maximum(t, ln) >= need
+                elif interest_mode == 'transfer':
+                    m &= t >= need
+                elif interest_mode == 'loan':
+                    m &= ln >= need
+                else:                                   # 'none': wouldn't consider either
+                    m &= np.maximum(t, ln) < interest_model.DOUBTFUL
+        if home_grown:
+            rule, hg_nation, negate = (tuple(home_grown) + (False,))[:3]
+            ok = self.home_grown(rule, hg_nation)
+            if ok is not None:
+                m &= ~ok if negate else ok
         if min_value is not None or max_value is not None:
             val = np.where(self.value == 0xFFFFFFFF, 0, self.value).astype(np.int64)    # 0xFFFFFFFF = unknown
             if min_value is not None:
