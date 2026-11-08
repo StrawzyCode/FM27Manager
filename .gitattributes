@@ -1,2 +1,4 @@
 # Keep line endings consistent whichever laptop (and git setting) a change is made on.
 * text=auto
+# cmd.exe misreads labels (goto) in batch files with LF line endings
+*.bat text eol=crlf
