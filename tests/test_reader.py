@@ -26,6 +26,8 @@ r = FM26Reader()
 t0 = time.time()
 snap = r.scan()
 print('scan %.2fs' % (time.time() - t0), {k: snap.info[k] for k in ('players', 'club', 'squad', 'loan_in', 'loaned_out', 'game_date', 'club_rep')})
+check(len(snap.N) == len(world.recs) and snap.names[-1] == world.players[-1]['name'],
+      'every record read, though the last one runs past the end of its memory block (%d of %d)' % (len(snap.N), len(world.recs)))
 check(snap.info['club'] == 'KäPa', 'human club found')
 check(snap.info['squad'] == len(world.kapa_squad), 'squad size %d == %d' % (snap.info['squad'], len(world.kapa_squad)))
 check(snap.info['home_grown_ready'] is False, 'home-grown reports not ready until calibrated')
