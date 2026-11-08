@@ -28,12 +28,55 @@
     if (h) h.textContent = `1. ${game} Live Data`;
   }
 
+  const LOST_CONTACT = 'Lost contact with the FM27 Plus app (it is no longer running in the background). '
+    + 'Close this window and start FM27Plus.exe again.';
+
   async function api(path) {
-    const res = await fetch(path, { cache: 'no-store' });
+    let res;
+    try {
+      res = await fetch(path, { cache: 'no-store' });
+    } catch (e) {
+      throw new Error(LOST_CONTACT);        // the request never got an answer: the app itself is gone
+    }
     let body = null;
     try { body = await res.json(); } catch (e) { /* ignore */ }
     if (!res.ok) throw new Error((body && body.error) || res.statusText);
     return body;
+  }
+
+  // --- keeping the app alive ------------------------------------------------
+  // The app quits once its window has gone. It learns that from a goodbye sent as the page closes,
+  // so a slow heartbeat (Edge / Chrome throttle a minimised or covered window) can't shut it down.
+  // The heartbeat itself runs in a worker, which the browser throttles far less than the page.
+  // Each ping says whether the window is on screen: a visible page isn't throttled, so silence that starts
+  // while it is visible means it has gone (e.g. the browser crashed without saying goodbye).
+  const visibleFlag = () => (document.visibilityState === 'visible' ? '1' : '0');
+  function startHeartbeat() {
+    const ping = () => fetch('/api/ping?visible=' + visibleFlag(), { cache: 'no-store' }).catch(() => {});
+    ping();
+    let worker = null;
+    try {
+      const src = `let v = '1'; onmessage = (e) => { v = e.data; };
+        setInterval(() => fetch(${JSON.stringify(location.origin + '/api/ping?visible=')} + v, { cache: 'no-store' }).catch(() => {}), 5000);`;
+      worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      worker.postMessage(visibleFlag());
+    } catch (e) { /* no workers: poll() below pings as well */ }
+    let saidBye = false;
+    const bye = () => {
+      if (saidBye) return;
+      saidBye = true;
+      let sent = false;
+      try { sent = navigator.sendBeacon('/api/bye'); } catch (e) { /* try fetch below */ }
+      if (!sent) { try { fetch('/api/bye', { method: 'POST', keepalive: true }); } catch (e) { /* the idle limit covers it */ } }
+    };
+    window.addEventListener('pagehide', bye);
+    window.addEventListener('beforeunload', bye);
+    window.addEventListener('pageshow', (e) => { if (e.persisted) { saidBye = false; ping(); } });   // back from the bfcache
+    document.addEventListener('visibilitychange', () => {
+      if (worker) worker.postMessage(visibleFlag());
+      ping();
+      if (document.visibilityState === 'visible') poll();
+    });
   }
 
   // --- conversion -------------------------------------------------------
@@ -59,6 +102,8 @@
   function stars(v) {
     return (Math.round(Math.min(5, v / 40) * 2) / 2).toString().replace('.', ',');
   }
+
+  const INTEREST_LABELS = { 3: 'Interested', 2: 'Persuadable', 1: 'Doubtful', 0: 'Not interested', '-1': 'Not possible' };
 
   function toEnginePlayer(p) {
     const raw = {};
@@ -89,8 +134,9 @@
     raw['Nation'] = p.nation || '';
     // Nationality-based guide for a club in your country (see the Scouting Pool filter).
     raw['Work Permit'] = p.needsPermit === true ? 'Needed' : (p.needsPermit === false ? 'Not needed' : '');
-    // Estimated interest in joining your club (3 interested .. 0 unlikely), see the Scouting Pool filter.
-    raw['Interest'] = ({ 3: 'Interested', 2: 'Slightly interested', 1: 'Doubtful', 0: 'Unlikely' })[p.interest] || '';
+    // Estimated interest in joining your club on a transfer / on a loan (see the Scouting Pool filter).
+    raw['Interest'] = INTEREST_LABELS[p.interest] || '';
+    raw['Loan Interest'] = INTEREST_LABELS[p.loanInterest] || '';
     raw['Height'] = p.height ? p.height + ' cm' : '';
     raw['DoB'] = p.dob || '';
     const normRaw = {};
@@ -175,9 +221,51 @@
     const inote = $('poolInterestNote');
     if (inote) {
       inote.textContent = info && info.interest_rule
-        ? `Interest: ${info.interest_rule}.`
+        ? `Interest is ${info.interest_rule}.`
         : 'Interest needs your club to be found first (press Scan Game).';
     }
+    const hgRow = $('poolHgRow');
+    const hgNote = $('poolHgNote');
+    const ready = !!(info && info.home_grown_ready);
+    if (hgRow) hgRow.classList.toggle('unavailable', !ready);
+    if ($('poolHgOn')) {
+      $('poolHgOn').disabled = !ready;
+      if (!ready) $('poolHgOn').checked = false;
+      syncHgRow();
+    }
+    if (hgNote) {
+      hgNote.textContent = ready
+        ? 'At least 3 seasons registered with clubs in that nation (or at your club) inside the age window, from his career history.'
+        : 'Home-grown status isn\'t available yet: the career history it needs hasn\'t been located in this game version\'s memory (see CALIBRATION.md). The filter is ignored until then.';
+    }
+  }
+
+  // The game's Player Interest dialog shows the interest levels under whichever option is picked.
+  function syncInterestBox() {
+    const levels = $('poolInterestLevels');
+    const picked = document.querySelector('input[name="poolInterestMode"]:checked');
+    if (!levels || !picked) return;
+    const mode = picked.value;
+    levels.hidden = !(mode === 'tl' || mode === 'transfer' || mode === 'loan');
+    if (!levels.hidden) picked.closest('label').after(levels);
+  }
+
+  function syncHgRow() {
+    const on = $('poolHgOn') && $('poolHgOn').checked;
+    const row = $('poolHgRow');
+    if (row) row.classList.toggle('off', !on);
+    const rule = $('poolHgRule') ? $('poolHgRule').value : '';
+    if ($('poolHgNation')) $('poolHgNation').hidden = rule.startsWith('club');     // club rules are about your club
+  }
+
+  async function loadNations() {
+    try {
+      const { nations } = await api('/api/nations');
+      const list = $('poolNationList');
+      if (!list || !nations) return;
+      list.textContent = '';
+      nations.forEach((n) => list.appendChild(new Option(n)));
+    } catch (e) { /* just no suggestions */ }
   }
 
   async function loadSquad() {
@@ -201,10 +289,21 @@
     const q = new URLSearchParams();
     [['minAge', 'poolMinAge'], ['maxAge', 'poolMaxAge'], ['minPA', 'poolMinPA'], ['minCA', 'poolMinCA'],
       ['position', 'poolPosition'], ['nation', 'poolNation'], ['limit', 'poolLimit'],
-      ['minValue', 'poolMinValue'], ['maxValue', 'poolMaxValue'], ['interest', 'poolInterest']].forEach(([k, id]) => {
+      ['minValue', 'poolMinValue'], ['maxValue', 'poolMaxValue']].forEach(([k, id]) => {
       const v = get(id);
       if (v) q.set(k, v);
     });
+    const mode = document.querySelector('input[name="poolInterestMode"]:checked');
+    if (mode && mode.value) {
+      q.set('interestMode', mode.value);
+      const level = document.querySelector('input[name="poolInterestLevel"]:checked');
+      if (mode.value !== 'none' && level) q.set('interest', level.value);
+    }
+    if ($('poolHgOn') && $('poolHgOn').checked && !$('poolHgOn').disabled) {
+      q.set('hgRule', get('poolHgRule'));
+      if (!get('poolHgRule').startsWith('club')) q.set('hgNation', get('poolHgNation'));
+      if (get('poolHgOp') === 'not') q.set('hgNot', '1');
+    }
     if ($('poolUnattached') && $('poolUnattached').checked) q.set('includeUnattached', '1');
     if ($('poolNoPermit') && $('poolNoPermit').checked) q.set('excludePermit', '1');
     if (btn) btn.disabled = true;
@@ -265,6 +364,7 @@
       updatePermitNote(st.info);
       updateClubPicker(st.info);
       await loadSquad();
+      loadNations();
       if (!window.__poolAutoLoaded || poolLoaded) {      // first time, or refresh a pool that was already loaded
         window.__poolAutoLoaded = true;
         loadPool();
@@ -278,11 +378,21 @@
     }
   }
 
+  let pollFailures = 0;
+
   async function poll() {
     try {
-      api('/api/ping').catch(() => { /* the status call below reports a dead server */ });
+      api('/api/ping?visible=' + visibleFlag()).catch(() => { /* the status call below reports a dead server */ });
       if (scanning) return;
-      const st = await api('/api/status');
+      let st;
+      try {
+        st = await api('/api/status');
+        pollFailures = 0;
+      } catch (e) {
+        // A busy moment can drop one request; three in a row (~15 s) means the app has stopped.
+        if (++pollFailures >= 3) setStatus('bad', 'FM27 Plus has stopped', `${e.message}<br>Your last results stay on screen.`);
+        return;
+      }
       setGame(st.game);
       if (!st.running) {
         cancelRetry();
@@ -308,6 +418,7 @@
       return;            // not served by the app: stay a plain web page
     }
     meta = await api('/api/meta');
+    startHeartbeat();
     window.FM26Live = { fetchTop };
     setGame(status.game);
     document.body.classList.add('memory-mode');
@@ -322,11 +433,16 @@
     if ($('poolLoadBtn')) $('poolLoadBtn').addEventListener('click', loadPool);
     if ($('liveLoanedOut')) $('liveLoanedOut').addEventListener('change', () => { loadSquad().catch(() => {}); });
     if ($('liveClub')) $('liveClub').addEventListener('change', changeClub);
+    document.querySelectorAll('input[name="poolInterestMode"]').forEach((r) => r.addEventListener('change', syncInterestBox));
+    ['poolHgOn', 'poolHgRule'].forEach((id) => { if ($(id)) $(id).addEventListener('change', syncHgRow); });
+    syncInterestBox();
+    syncHgRow();
     if (status.scanned) {
       // The server already holds a scan (e.g. the window was reopened): show it straight away.
       lastInfo = status.info;
       setStatus(status.error ? 'warn' : 'ok', `Connected to ${game}`, describe(status.info));
       loadSquad().then(() => {
+        loadNations();
         if (!window.__poolAutoLoaded) { window.__poolAutoLoaded = true; loadPool(); }
       }).catch((e) => setStatus('bad', 'Could not load squad', e.message));
       poll();
