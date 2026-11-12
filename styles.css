@@ -278,6 +278,8 @@ select:focus { border-color: var(--gold); }
 }
 .score-pill.depth-avg { background: rgba(251, 191, 36, 0.22); }
 .score-pill.potential-score { background: rgba(96, 165, 250, 0.18); color: #93c5fd; }
+.score-pill.impact-pill { background: rgba(52, 211, 153, 0.16); color: #6ee7b7; cursor: help; }
+.hint a { color: #93c5fd; }
 
 .potential-pill {
   display: inline-block; background: rgba(96, 165, 250, 0.18); color: #93c5fd;

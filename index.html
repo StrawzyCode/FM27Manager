@@ -201,13 +201,21 @@
           <input type="checkbox" id="potentialToggle">
           Factor in potential
         </label>
-        <label class="filter-toggle" title="How strongly a player's hidden profile moves his rating: consistency, important matches, pressure, adaptability, professionalism, temperament, injury proneness... (estimates of FM27's Tactical Understanding, Player Buy-In and reliability - the game doesn't let a memory read see those). Normal = up to +/-10%.">
-          Hidden factors
+        <label class="filter-toggle" title="What a rating is built from. Role fit = the average of the role's key attributes, which matches the game's own star ratings. Match engine = attributes weighted by what they were worth in FM27's match engine (Fm-Match-Lab: Pace and Acceleration far ahead, then Jumping Reach, Stamina, Anticipation, Dribbling, Concentration...; most technical attributes showed no clear effect). Blend = half of each. Goalkeepers always use role fit.">
+          Ratings
+          <select id="ratingModelSelect">
+            <option value="blend" selected>Blend: role + match engine</option>
+            <option value="role">Role fit (game's stars)</option>
+            <option value="engine">Match engine (studies)</option>
+          </select>
+        </label>
+        <label class="filter-toggle" title="How much a player's availability moves his rating: Injury Proneness and Natural Fitness, which decide how fit and sharp he is going into matches. In Fm-Match-Lab's studies sharpness at 50% cost a full point per game and condition at 80% cost 0.8, while personality, consistency, buy-in and current ability showed no in-match effect, so they no longer count. Normal = up to +/-5%.">
+          Availability
           <select id="hiddenSelect">
             <option value="off">Off</option>
-            <option value="low">Low (±5%)</option>
-            <option value="normal" selected>Normal (±10%)</option>
-            <option value="high">High (±18%)</option>
+            <option value="low">Low (±3%)</option>
+            <option value="normal" selected>Normal (±5%)</option>
+            <option value="high">High (±10%)</option>
           </select>
         </label>
         <label class="filter-toggle" id="hideInjuredLabel" hidden title="Leaves injured players out of the Squad Depth and Tactical Fit lists; untick it to bring them back. Uses the first-team injury list the Medical Centre shows (U21/U18 injuries aren't included).">
