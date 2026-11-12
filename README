@@ -92,11 +92,13 @@ every time the squad loads, so they stay current without a full rescan. Hover a 
 what it costs. **Use today's fitness** (toolbar, Squad Depth / Tactical Fit / Tactic Advisor /
 Team Info) takes that cost off each rating, so the Best XI and the Tactic Advisor pick for
 today's match. Fm-Match-Lab's Study 5 replayed real FM27 matches with a whole team at a set
-level. Against fully fit, 75% sharpness cost 0.53 points per game and 50% cost 1.19; 90%
-condition cost 0.46 and 80% cost 0.98. That is more than any attribute or tactic setting.
-Shared over the eleven starters, one player at 75% sharpness costs about 0.05 points per game.
-That is worth about 1.5 points off each of his attributes, since one point on every attribute
-the engine rewards is worth about 0.033 per starter (Study 1). The values were checked against
+level. Against fully fit (the confirmation rerun: full condition +0.13, full sharpness +0.10),
+75% sharpness cost 0.47 points per game and 50% cost 1.13; 90% condition cost 0.41 and 80% cost
+0.93. That is more than any attribute or tactic setting. Shared over the eleven starters, one
+player at 75% sharpness costs about 0.04 points per game. That is worth about 1.3 points off each
+of his attributes, since one point on every attribute the engine rewards is worth about 0.032 per
+starter (Study 1). Team Info's **Fitness today** lists the XI's tired or rusty starters with what
+each costs, and the players outside the XI who need minutes to get sharp. The values were checked against
 FM's own icons and condition bands for the 75 players of a live save (see `fm26mem/layout.py`).
 
 **Position order:** every page that lists positions (Squad Depth, Best XI,
@@ -179,13 +181,14 @@ PATH and builds in its own environment, `.build-venv`, which it sets up from `re
 | **Squad Depth** | Top three players for every slot of your tactic, nobody used twice |
 | **Tactical Fit** | The best XI (an optimal assignment, not a greedy pick), plus the **bench** (reserve keeper first, then the player who covers the most ground) and the **rotation XI** (each slot's second choice), then a ranked table per slot |
 | **Tactic Advisor** | Scores your pitch tactic, every saved formation and eight presets (4-2-3-1, 4-3-3, 4-4-2, 4-1-4-1, 4-3-2-1, 3-5-2, 3-4-3, 5-3-2) by the best XI your squad can field in them. Presets use the roles that suit your squad best; **Use on pitch** loads one |
-| **Team Info** | Squad at a glance: what the match engine rewards (out-of-position starters, the XI on the top attributes, the biggest levers), the stars, brightest prospects, who to loan out for minutes, who needs a new contract, surplus players, injuries |
+| **Team Info** | Squad at a glance: what the match engine rewards (fitness today and who needs minutes, out-of-position starters, the XI on the top attributes), the stars, brightest prospects, who to loan out for minutes, who needs a new contract, surplus players, injuries |
 | **Youngsters** | Everyone 19 / 21 / 23 or under with CA, PA, best roles, current vs potential rating, a growth score and a verdict (*Wonderkid*, *Future star*, *Future starter*, *Squad player*, *Ready now*), and a **future XI** built from them by potential |
 | **Potential** | How good each squad player could become in each slot (PA ceiling, age, growth attributes) |
-| **Player Search** | One player: attributes, a **hidden profile** (personality, hidden attributes, estimated tactical understanding / buy-in), and his best roles in every position |
+| **Player Search** | One player: attributes, his **match-engine** breakdown (what each attribute the engine rewards is worth for him), a **hidden profile** (personality, hidden attributes, the game's tactical ability, availability), and his best roles in every position |
 | **Financial** | Surplus players by transfer value |
-| **Scouting** | The scouting pool ranked against your tactic, with *Impact* (match-engine fit, sortable) and *Avail.* columns |
+| **Scouting** | The scouting pool ranked against your tactic, with *Impact* (match-engine fit), *vs CA* (Impact above or below what his CA usually brings: the bargains) and *Avail.* columns, all sortable |
 | **World** | The world's best players (by ability) or the next generation (best young potentials) from the whole database, filterable by position / age / nation |
+| **Match Lab** | What FM27's match engine rewards, measured: your squad checked against it (fitness, positions, keeper kicking, who is worth more or less than his CA), the levers, attribute values, the familiarity curve, the tactic league and the in-match tweaks |
 
 ## How the scoring works (FM27)
 
@@ -212,12 +215,16 @@ matches on the game's own engine (27.0.1) about 190,000 times, changing one thin
 attribute moved by 5 points for a whole squad was worth, in expected-goal difference per game
 per point: Pace 0.10 (+0.03 in finishing), Acceleration 0.09, Jumping Reach 0.07, Stamina 0.06,
 Anticipation 0.05, Dribbling 0.05, Concentration 0.04, Finishing 0.04 (it converts chances rather
-than creating them), Balance 0.03, Composure 0.03, Work Rate 0.02 and Vision 0.02. Everything else -
+than creating them), Balance 0.03, Composure 0.03, Work Rate 0.02 (counted up to 12: it showed
+nothing around 12 when squads were levelled, and another tester's season runs found it useless above
+12) and Vision 0.02. Everything else -
 Passing, Technique, First Touch, Crossing, Tackling, Marking, Positioning, Decisions, Teamwork, Flair... -
 showed no clear effect. The match-engine fit is his attributes weighted by those values (1-20 scale,
 `ENGINE_WEIGHTS` in `engine.js`), shown as **Impact** (0-100) in Scouting and World and broken down on the
 Player Search page. The engine plays on attributes, not on CA, so a high Impact with a modest CA or
-value is a bargain.
+value is a bargain. Scouting's **vs CA** column measures exactly that: a straight line of Impact
+against CA is fitted over the loaded pool, and each player shows how far he sits above (+) or below
+it. Match Lab does the same for your own squad (worth more than their CA / flattered by it).
 
 A slot's **rating** is then:
 
@@ -246,14 +253,23 @@ A slot's **rating** is then:
 - The **Best XI** is a true best-value assignment (Hungarian algorithm), so the first slot
   can no longer take a player who is worth more somewhere else.
 
-**Team Info** has a *What the match engine rewards* panel built on the same studies: starters
-playing out of position with their estimated cost in league points, the XI's averages and weakest
-links on the attributes the engine values most, a note when the keeper's Kicking is high (the one
-clearly negative attribute), and the biggest levers with their measured size (sharpness and
-condition, positions, tactical familiarity, letting the assistant rather than the AI manage the
-match, team cohesion, mentality, presets). The **Tactic Advisor** adds a rough points-per-game gap to
-your tactic and the studies' warning that an untrained tactic costs about 0.4 points a game. All the
-studies come from one club (a promoted Premier League side), so the sizes are a guide.
+**Team Info** has a *What the match engine rewards* panel built on the same studies: fitness today
+(tired or rusty starters with their cost, and who needs minutes), starters playing out of position
+with their estimated cost in league points, the XI's averages and weakest links on the attributes the
+engine values most, and a note when the keeper's Kicking is high (the one clearly negative
+attribute). The **Tactic Advisor** adds a rough points-per-game gap to your tactic and what the
+studies say about switching: familiarity is an S-curve (under about 20 costs a third of a point a
+game, from about 50 a team is at the plateau), it fades between sessions, and since a tactic's
+overall strength predicted its results against every style, changing tactic per opponent buys little.
+
+The **Match Lab** tab collects the evidence (Fm-Match-Lab Studies 1-8 and the other FM27 tests they
+compare with): your squad checked against it, the levers with their confirmed sizes (sharpness,
+condition, positions, familiarity, in-match management, pressing trap, cohesion, mentality, presets,
+tweaks), the attribute values, the familiarity curve, the 18-tactic league (every community tactic
+above every preset; Gegenpress and Fluid Counter-Attack the best presets, Catenaccio and Park the
+Bus the worst) and the in-match Tactical Tweaks (none helps on average; Lock It Down from kick-off
+costs about 0.2). Most results come from one club (a promoted Premier League side), the league and
+tweak tests from equal synthetic squads, so the sizes are a guide.
 
 The "Hide unfamiliar-position players" box removes anyone rated below Competent (under 10)
 for the slot. **Auto-pick roles** sets every slot to the in- and out-of-possession roles

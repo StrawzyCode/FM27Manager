@@ -108,14 +108,17 @@
     tabBtnTeamInfo: document.getElementById('tabBtnTeamInfo'),
     tabBtnYoungsters: document.getElementById('tabBtnYoungsters'),
     tabBtnWorld: document.getElementById('tabBtnWorld'),
+    tabBtnMatchLab: document.getElementById('tabBtnMatchLab'),
     tabTactics: document.getElementById('tabTactics'),
     tabTeamInfo: document.getElementById('tabTeamInfo'),
     tabYoungsters: document.getElementById('tabYoungsters'),
     tabWorld: document.getElementById('tabWorld'),
+    tabMatchLab: document.getElementById('tabMatchLab'),
     tacticsBody: document.getElementById('tacticsBody'),
     teamInfoBody: document.getElementById('teamInfoBody'),
     youngstersBody: document.getElementById('youngstersBody'),
     worldBody: document.getElementById('worldBody'),
+    matchLabBody: document.getElementById('matchLabBody'),
   };
 
   // Per-position sort state for the Scouting tab tables - {field: 'score'|'potential', dir: 'asc'|'desc'}
@@ -150,6 +153,23 @@
       engineShare: RATING_MODELS[model] !== undefined ? RATING_MODELS[model] : RATING_MODELS.blend,
       ipWeight: 0.5,
     };
+  }
+
+  // Impact against CA over the scouting pool: fitted once per pool (scoutVersion changes whenever it is replaced).
+  let caModelCache = { version: -1, model: null };
+  function poolCaModel() {
+    if (!scoutSquad) return null;
+    if (caModelCache.version !== scoutVersion) caModelCache = { version: scoutVersion, model: impactCaModel(scoutSquad.players) };
+    return caModelCache.model;
+  }
+
+  /** Impact above / below what his CA usually brings (0-100 scale), coloured; '—' for keepers and unknowns. */
+  function vsCaHtml(player, model) {
+    const d = impactVsCa(player, model);
+    if (d === null) return '<span style="color:var(--muted-2)">—</span>';
+    const cls = d >= 3 ? 'vsca-up' : (d <= -3 ? 'vsca-down' : 'vsca-flat');
+    const tip = `Match-engine fit ${d >= 0 ? d.toFixed(1) + ' above' : (-d).toFixed(1) + ' below'} what players with CA ${player.ca} in this pool usually have`;
+    return `<span class="vsca ${cls}" title="${esc(tip)}">${d >= 0 ? '+' : ''}${d.toFixed(1)}</span>`;
   }
 
   /** Match-engine fit (0-100) with the attributes behind it in the tooltip; '—' where it can't be worked out. */
@@ -652,6 +672,7 @@
     else if (currentTab === 'teamInfo') renderTeamInfo();
     else if (currentTab === 'youngsters') renderYoungsters();
     else if (currentTab === 'world') renderWorld();
+    else if (currentTab === 'matchLab') renderMatchLab();
   }
 
   // --- View Renderers ---
@@ -921,8 +942,10 @@
 
   function sortScoutRows(rows, positionCode) {
     const state = scoutSortState[positionCode] || { field: 'score', dir: 'desc' };
+    const model = state.field === 'vsca' ? poolCaModel() : null;
     const val = (r) => (state.field === 'potential' ? r.potentialScore
-      : (state.field === 'impact' ? engineFit20(r.player) : r.score));
+      : state.field === 'impact' ? engineFit20(r.player)
+      : state.field === 'vsca' ? impactVsCa(r.player, model) : r.score);
     return [...rows].sort((a, b) => {
       const av = val(a);
       const bv = val(b);
@@ -954,6 +977,7 @@
     const clubCell = (p) => hasClub
       ? `<td>${p.raw['Club'] || '<span style="color:var(--muted-2)">—</span>'}${p.raw['Nation'] ? ` <span style="color:var(--muted)">· ${p.raw['Nation']}</span>` : ''}${p.raw['Work Permit'] === 'Needed' ? ' <span style="color:var(--muted)" title="Needs a work permit for your club (by nationality)">· permit</span>' : ''}</td><td>${p.raw['Transfer Value'] || '—'}</td><td class="int-cell">${interestTagsHtml(p)}</td>`
       : '';
+    const caModel = poolCaModel();
     const tableRows = shown.map((r, i) => `
       <tr>
         <td>#${i + 1}</td>
@@ -962,12 +986,13 @@
         <td><span class="score-pill">${r.score.toFixed(1)}</span></td>
         <td>${r.potentialScore !== null ? `<span class="score-pill potential-score">${r.potentialScore.toFixed(1)}</span>` : '<span style="color:var(--muted-2)">—</span>'}</td>
         <td>${impactHtml(r.player)}</td>
+        <td>${vsCaHtml(r.player, caModel)}</td>
         <td>${famTagHtml(r.familiarity)}</td>
         <td>${hiddenTagHtml(r)}</td>
         ${clubCell(r.player)}
       </tr>
     `).join('');
-    const colCount = hasClub ? 11 : 8;
+    const colCount = hasClub ? 12 : 9;
     const countLabel = rows.length > shown.length
       ? `showing top ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}`
       : `${rows.length.toLocaleString()} match${rows.length === 1 ? '' : 'es'}`;
@@ -995,6 +1020,7 @@
               <th class="sortable-th" data-sort-field="score">Score${sortArrow('score')}</th>
               <th class="sortable-th" data-sort-field="potential">Potential${sortArrow('potential')}</th>
               <th class="sortable-th" data-sort-field="impact" title="Match-engine fit (0-100): his attributes weighted by what they were worth in FM27's match engine (Fm-Match-Lab studies). The engine plays on attributes, not on CA - a high Impact with a modest CA or value is a bargain.">Impact${sortArrow('impact')}</th>
+              <th class="sortable-th" data-sort-field="vsca" title="Impact above (+) or below (-) what players of his current ability usually have in this pool. The match engine never reads CA, but CA drives transfer values and wages - so a big plus is a player who is worth more in a match than he will cost.">vs CA${sortArrow('vsca')}</th>
               <th>Familiarity</th>
               <th title="How much his availability (injury proneness, natural fitness) moves his rating">Avail.</th>
               ${hasClub ? '<th>Club · Nation</th><th>Value</th><th title="Estimated interest in joining your club on a transfer (T) and on a loan (L)">Interest</th>' : ''}
@@ -1304,7 +1330,8 @@
     const f = engineFit20(player);
     const rows = engineDrivers(player).map(d => {
       const per5 = ENGINE_PPG[d.name] !== undefined ? ENGINE_PPG[d.name] * 5 / 11 * 38 : null;
-      return `<tr><td>${esc(d.name)}</td><td><strong>${d.value.toFixed(1)}</strong></td><td>${(d.weight * 100).toFixed(1)}</td>
+      const capped = d.cap && d.value > d.cap ? ` <span class="muted-inline" title="Stops paying above ${d.cap}: it counted with real squads but not around 12 (Study 2) or above 12 in season tests">(counts to ${d.cap})</span>` : '';
+      return `<tr><td>${esc(d.name)}</td><td><strong>${d.value.toFixed(1)}</strong>${capped}</td><td>${(d.weight * 100).toFixed(1)}</td>
         <td>${per5 === null ? '—' : `${per5 >= 0 ? '+' : ''}${per5.toFixed(1)}`}</td></tr>`;
     }).join('');
     panel.innerHTML = `
@@ -1506,7 +1533,7 @@
       <div class="panel">
         <div class="panel-head"><h2>Tactic Advisor</h2></div>
         <p class="hint">Every formation scored by the best XI your squad can field in it (average rating of the eleven, with availability and position familiarity counted). Presets use the in- and out-of-possession roles that suit your squad best; your pitch tactic and saved formations keep the roles you chose. Injured players are ${hideInjured ? 'left out' : 'included (tick "Hide injured players" to leave them out)'}.${fitness ? ' Today\'s condition and match sharpness are counted.' : ''}</p>
-        <p class="hint"><strong>Before switching</strong> (Fm-Match-Lab, FM27's own engine): a tactic your players haven't trained costs about 0.4 points a game, and low against high familiarity was worth about 0.5 - as much as +7 Pace for the whole squad. Training it to about 75 in every area recovers that; more gains nothing, and training counts twice as much as playing matches with it. So a small gain on paper isn't worth a switch mid-season. In the same studies every installed FM preset style did worse than a tactic suited to the squad, and the defensive ones (Park the Bus, Catenaccio) were by far the worst.</p>
+        <p class="hint"><strong>Before switching</strong> (Fm-Match-Lab, FM27's own engine): familiarity follows an S-curve. Below about 20 in the tactical areas a team loses about a third of a point a game; from about 50 it gains 0.2-0.3 and goes no higher (90 and 100 play identically). From untrained to learned is worth about half a point a game - as much as +7 Pace for the whole squad. Training counts twice as much as playing matches with it, and it fades between sessions (about half after three weeks), so train the tactic as a whole and keep at it; raising one area on its own buys almost nothing. A small gain on paper isn't worth a switch mid-season. When tactics play each other on equal terms, a tactic's overall strength predicts its results against any style - there is no rock-paper-scissors - so changing tactic for each opponent buys little. See the <a href="#" data-goto="matchLab">Match Lab</a> tab for the tactic league and the in-match tweaks.</p>
         <div class="table-wrap"><table class="results-table">
           <thead><tr><th></th><th>Formation</th><th>XI rating</th><th>Weakest link</th><th>Lineup</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
@@ -1574,14 +1601,14 @@
     const gkSlot = ctx.ev ? ctx.ev.assignment.find((r, i) => r && ctx.slots[i].positionCode === 'GK') : null;
     const gk = gkSlot ? gkSlot.player : null;
     const kick = gk ? attrOf(gk, 'Kicking') : null;
-    if (kick !== null && kick >= 15) {
+    if (kick !== null && Math.round(kick) >= 15) {
       gkNote = `<p class="hint" style="margin-top:6px"><strong>${esc(gk.info.Player)}</strong> has Kicking ${kick.toFixed(0)}. Goalkeeper Kicking was the one attribute with a clearly negative effect (−0.12 xG difference per +5, with real squads only): long kicks may skip the build-up a tactic relies on. If you play out from the back, short distribution is worth a try.</p>`;
     }
 
-    const lever = (what, size) => `<tr><td>${what}</td><td>${size}</td></tr>`;
     return `
       <div class="panel">
-        <div class="panel-head"><h2>What the match engine rewards</h2><span class="hint" style="margin:0">from <a href="https://github.com/caiograco289/Fm-Match-Lab" target="_blank" rel="noopener">Fm-Match-Lab</a>: real FM27 matches replayed on the game's own engine, ~190,000 times</span></div>
+        <div class="panel-head"><h2>What the match engine rewards</h2><span class="hint" style="margin:0">from <a href="https://github.com/caiograco289/Fm-Match-Lab" target="_blank" rel="noopener">Fm-Match-Lab</a>: real FM27 matches replayed on the game's own engine - the evidence is on the <a href="#" data-goto="matchLab">Match Lab</a> tab</span></div>
+        ${fitnessTodayHtml(ctx)}
         <div class="info-grid">
           <div><h3>Out of position in your XI</h3>${posBlock}</div>
           <div><h3>Your XI on the top attributes</h3>
@@ -1590,18 +1617,184 @@
             ${gkNote}
           </div>
         </div>
-        <h3 style="margin-top:12px">The biggest levers, measured</h3>
-        ${miniTable(['What', 'Effect in the studies'], [
-          lever('Match sharpness / condition', 'sharpness 50%: −1.0 pts a game; 75%: −0.37. Condition 80%: −0.8; 90%: −0.28. Rotate and keep players sharp - it outweighs any tactical tweak'),
-          lever('Playing people in their positions', 'starters capped at 15: −0.26 pts a game; at 10: −0.85'),
-          lever('Tactical familiarity', 'untrained: about −0.4 pts a game; trained to about 75 in each area: +0.2, and no more after that. Training counts twice as much as match exposure'),
-          lever('In-match management', 'letting the AI run the match instead of the assistant: −0.56 pts a game'),
-          lever('Team cohesion', 'lowest to highest: +0.32 pts a game'),
-          lever('Mentality', 'one step more attacking: −0.26 xG difference, no gain in points'),
-          lever('Tactic', 'every installed preset did worse than a tactic suited to the squad; Park the Bus (−0.94 pts a game) and Catenaccio (−0.60) were the worst'),
-          lever('No measurable effect', 'current ability, reputation, height, weight, buy-in, morale (small), most personality fields, most single team instructions'),
-        ])}
         <p class="hint" style="margin-top:6px">All from one club's matches (a promoted Premier League side against mostly stronger teams); a dominant team may see different sizes. Season figures are rough: per-game effects × ${SEASON_GAMES}.</p>
+      </div>`;
+  }
+
+  /** Who is tired or rusty today, what it costs, and who needs minutes (live data: condition and sharpness). */
+  function fitnessTodayHtml(ctx) {
+    if (!squadHasFitness()) return '';
+    const pct = (v) => (typeof v === 'number' ? Math.round(v) + '%' : '—');
+    const xiRows = ctx.xi.map(p => ({ p, f: fitnessCost(p) }))
+      .filter(x => x.f.ppg < -0.005).sort((a, b) => a.f.ppg - b.f.ppg);
+    const advice = (p) => {
+      const tired = typeof p.condition === 'number' && p.condition < 90;
+      const rusty = typeof p.sharpness === 'number' && p.sharpness < 75;
+      return tired && rusty ? 'tired and rusty: rest him if the bench is close' : tired ? 'tired: rest him if you can' : rusty ? 'short of sharpness: minutes, but not at any cost' : 'slightly below full fitness';
+    };
+    const xiTotal = xiRows.reduce((s, x) => s + x.f.ppg, 0);
+    const xiIds = ctx.xiIds;
+    const needMinutes = ctx.players.filter(p => !xiIds.has(playerId(p)) && !p.injured && typeof p.sharpness === 'number' && Math.round(p.sharpness) < 75)
+      .sort((a, b) => (b.ca || 0) - (a.ca || 0)).slice(0, 8);
+    return `
+      <div class="info-grid" style="margin-bottom:10px">
+        <div><h3>Fitness today: your XI</h3>
+          <p class="hint">Study 5: a team at 75% sharpness lost 0.37 points a game, at 80% condition 0.80 - more than any tactical setting. ${useTodaysFitness() ? 'The XI below already counts it ("Use today\'s fitness" is on).' : 'Tick "Use today\'s fitness" to pick the XI with it counted.'}</p>
+          ${miniTable(['Player', 'Condition', 'Sharpness', 'Costs / game', 'Advice'], xiRows.map(x => `<tr><td>${nameCell(x.p)}</td><td>${pct(x.p.condition)}</td><td>${pct(x.p.sharpness)}</td><td>${(-x.f.ppg).toFixed(2)} pts</td><td>${advice(x.p)}</td></tr>`), 'Your XI is fit and sharp')}
+          ${xiRows.length ? `<p class="hint" style="margin-top:6px">Together: about ${(-xiTotal).toFixed(2)} points in this match.</p>` : ''}
+        </div>
+        <div><h3>Needs minutes</h3>
+          <p class="hint">Outside the XI and below 75% sharpness. Sharpness comes from playing: a reserve or U21 game, a friendly or a late sub keeps them ready for when you need them.</p>
+          ${miniTable(['Player', 'Age', 'Sharpness', 'Condition'], needMinutes.map(p => `<tr><td>${nameCell(p)}</td><td>${p.info.Age || '—'}</td><td>${pct(p.sharpness)}</td><td>${pct(p.condition)}</td></tr>`), 'Everyone is sharp')}
+        </div>
+      </div>`;
+  }
+
+  // --- Match Lab: the evidence, and your squad checked against it ---
+  //
+  // Fm-Match-Lab (github.com/caiograco289/Fm-Match-Lab) replays real FM27 matches on the game's own engine with one
+  // thing changed at a time; these are its published results (Studies 1-8, 10-12 November 2026) plus the other FM27
+  // tests it compares itself with. Numbers are points per game (ppg) unless marked; +0.1 ppg is about 4 points a season.
+
+  const LAB = {
+    levers: [
+      ['Match sharpness', 'team at 50%: −1.03 ppg; 75%: −0.37 (against its usual 90-100%); full sharpness +0.10 (likely)', 'Rotate; give fringe players minutes so they are sharp when needed'],
+      ['Condition', 'team at 80%: −0.80; 90%: −0.28; full condition +0.13 (confirmed)', 'Rest tired starters; it outweighs any tactical change'],
+      ['Positions', 'starters capped at 15: −0.26; capped at 10: −0.85. Natural in extra outfield positions: no effect', 'Play people where they are Natural or Accomplished'],
+      ['Tactical familiarity', 'untrained (under 20): about −0.33; learned (50+): +0.2 to 0.3; untrained to learned ≈ +0.5', 'Train the tactic as a whole and keep at it; no gain beyond the plateau'],
+      ['In-match management', 'the AI running the team instead of the assistant: −0.56 (provisional)', 'Keep the assistant (or yourself) in charge'],
+      ['Pressing trap', 'show inside: −0.19; show outside: −0.23 (confirmed on 1,200 pairs)', 'Leave it on standard'],
+      ['Team cohesion', 'lowest to highest: +0.21 (+0.32 xG difference, confirmed)', 'Avoid big squad turnover mid-season'],
+      ['Mentality', 'one step more attacking: −0.12 (−0.22 xGD, confirmed); more defensive: no clear change', 'Don\'t push up a level hoping for goals'],
+      ['Tactic', 'community tactics beat every installed preset by 0.1-0.8; Park the Bus and Catenaccio worst', 'Use a proven tactic over a preset'],
+      ['Tactical Tweaks', 'Lock It Down from kick-off: about −0.2; no tweak helps on average', 'Save tweaks for late-game situations'],
+      ['No measurable effect in a match', 'current ability, reputation, height, weight, morale (small), buy-in, every personality field, club cohesion, most single team instructions', 'Don\'t pay for CA or reputation the engine doesn\'t use'],
+    ],
+    familiarity: [[0, -0.33, -0.47], [10, -0.32, -0.44], [20, -0.20, -0.13], [30, -0.04, 0.08], [40, 0.07, 0.13], [50, 0.19, 0.28],
+      [60, 0.09, 0.33], [70, 0.17, 0.27], [80, 0.32, 0.41], [90, 0.18, 0.34], [100, 0.18, 0.34]],
+    league: [
+      ['STORMBRINGER 27 BBMIW 424 P102', 1.71, 1.66, 'community'], ['ZaZ - Ace of Clubs 1.0', 1.70, 1.65, 'community'],
+      ['ZaZ - Ace of Diamonds 1.0', 1.67, 1.67, 'community'], ['ZaZ - Ace of Hearts 1.0', 1.57, 1.60, 'community'],
+      ['ARGUS 27v3 3421 P103', 1.53, 1.62, 'community'], ['ZaZ - Ace of Spades 1.0', 1.52, 1.61, 'community'],
+      ['HIGHWAY STAR 27 4231 P101', 1.48, 1.51, 'community'], ['TIME 27 4321 P100', 1.46, 1.54, 'community'],
+      ['Gegenpress', 1.37, 1.45, 'preset'], ['Fluid Counter-Attack', 1.37, 1.34, 'preset'], ['Wing Play', 1.33, 1.27, 'preset'],
+      ['Route One', 1.27, 1.16, 'preset'], ['Vertical Tiki-Taka', 1.25, 1.32, 'preset'], ['Control Possession', 1.24, 1.36, 'preset'],
+      ['Direct Counter-Attack', 1.21, 1.16, 'preset'], ['Tiki-Taka', 1.20, 1.22, 'preset'], ['Catenaccio', 0.97, 0.99, 'preset'],
+      ['Park the Bus', 0.90, 0.86, 'preset'],
+    ],
+    tweaks: [
+      ['Lock It Down', '−0.20 (t −5.9)', '−0.30 ppg, −0.73 xGD', 'fewer goals at both ends; meant for protecting a late lead'],
+      ['Play Out The Back', '+0.07', '—', 'nothing clear'],
+      ['Go Narrower', '+0.05', 'within noise', 'nothing clear'],
+      ['Throw The Kitchen Sink', '+0.04', '−0.34 xGD', 'hurts a tactic already at high tempo / pressing; neutral on average'],
+      ['Go Long', '+0.01', '−0.18 xGD', 'as above'],
+      ['Play With More Urgency', '+0.01', '−0.16 xGD', 'as above'],
+      ['Goalkeeper Up For Set Pieces', '−0.01', '−0.17 ppg', 'concedes +0.2-0.3 goals a game: the keeper is caught upfield'],
+      ['Play With More Patience', '−0.02', '−0.04 xGD', 'the early "gain" didn\'t hold up'],
+      ['The other eleven', 'within ±0.03', 'within ±0.11 xGD', 'nothing clear'],
+    ],
+  };
+
+  function renderMatchLab() {
+    const box = el.matchLabBody;
+    if (!box) return;
+    const ppg = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(2)}`;
+    const ctx = squadContext();
+
+    // 1. your squad against the evidence (live where the data allows)
+    let checks = '';
+    if (ctx) {
+      const items = [];
+      if (squadHasFitness()) {
+        const tired = ctx.xi.map(p => ({ p, f: fitnessCost(p) })).filter(x => x.f.ppg < -0.005);
+        const total = tired.reduce((s, x) => s + x.f.ppg, 0);
+        items.push(['Fitness today', tired.length ? `${tired.length} of your XI below full condition or sharpness: about ${(-total).toFixed(2)} points in this match` : 'your XI is fit and sharp', tired.length ? 'Team Info lists who to rest; "Use today\'s fitness" picks around them' : '']);
+      } else {
+        items.push(['Fitness today', 'not available (needs the live game)', '']);
+      }
+      if (ctx.ev) {
+        const off = ctx.ev.assignment.filter(r => r && r.familiarity && r.familiarity.cost20 !== undefined && r.familiarity.rating < 20);
+        const cost = off.reduce((s, r) => s + r.familiarity.cost20 * STARTER_PPG_PER_POINT, 0);
+        items.push(['Positions', off.length ? `${off.length} starter${off.length === 1 ? '' : 's'} below Natural in their slot: about ${(cost * SEASON_GAMES).toFixed(1)} points over a season` : 'everyone in your XI plays a natural position', off.length ? 'Team Info names them' : '']);
+      } else {
+        items.push(['Positions', 'set up your tactic on the pitch to check the XI', '']);
+      }
+      const gkr = ctx.ev ? ctx.ev.assignment.find((r, i) => r && ctx.slots[i].positionCode === 'GK') : null;
+      const kick = gkr ? vecOf(gkr.player)[ATTR_INDEX[attrKey('Kicking')]] : NaN;
+      if (kick === kick) items.push(['Keeper Kicking', `${esc(gkr.player.info.Player)}: ${kick.toFixed(0)}`, Math.round(kick) >= 15 ? 'High Kicking was the one clearly negative attribute (real squads): try short distribution if you build from the back' : 'nothing to do']);
+      checks = miniTable(['Check', 'Your squad', 'What to do'], items.map(([a, b, c]) => `<tr><td>${a}</td><td>${b}</td><td>${c}</td></tr>`));
+
+      const model = impactCaModel(ctx.players);
+      if (model) {
+        const rows = ctx.players.map(p => ({ p, d: impactVsCa(p, model) })).filter(x => x.d !== null);
+        const top = rows.slice().sort((a, b) => b.d - a.d).slice(0, 5);
+        const low = rows.slice().sort((a, b) => a.d - b.d).slice(0, 5);
+        const tr = (x) => `<tr><td>${nameCell(x.p)}</td><td>${x.p.ca || '—'}</td><td>${impactHtml(x.p)}</td><td>${vsCaHtml(x.p, model)}</td></tr>`;
+        checks += `
+          <div class="info-grid" style="margin-top:10px">
+            <div><h3>Worth more than their CA</h3><p class="hint">The engine plays on attributes, not CA. These players' match-engine fit is well above what their CA usually brings in your squad - don't sell or bench them on CA alone.</p>
+              ${miniTable(['Player', 'CA', 'Impact', 'vs CA'], top.map(tr))}</div>
+            <div><h3>Flattered by their CA</h3><p class="hint">CA (and so value and wages) higher than what they bring in a match: the first ones to question, or to sell while the price is right.</p>
+              ${miniTable(['Player', 'CA', 'Impact', 'vs CA'], low.map(tr))}</div>
+          </div>`;
+      }
+    }
+
+    // 2. attributes
+    const attrRows = Object.keys(ENGINE_WEIGHTS).map(n => `<tr><td>${n}${ENGINE_CAPS[n] ? ` <span class="muted-inline">(counts up to ${ENGINE_CAPS[n]})</span>` : ''}</td>
+      <td>${(ENGINE_WEIGHTS[n] * 100).toFixed(1)}</td><td>${ppg(ENGINE_PPG[n] * 5)}</td><td>${(ENGINE_PPG[n] * 5 * SEASON_GAMES).toFixed(1)}</td></tr>`);
+    const famRows = LAB.familiarity.map(([lv, p, x]) => `<tr><td>${lv}</td><td>${ppg(p)}</td><td>${ppg(x)}</td></tr>`);
+    const leagueRows = LAB.league.map(([name, p, x, kind], i) => `<tr${kind === 'preset' ? ' class="lab-preset"' : ''}><td>${i + 1}</td><td>${esc(name)}</td><td>${kind === 'preset' ? 'FM preset' : 'community'}</td><td><strong>${p.toFixed(2)}</strong></td><td>${x.toFixed(2)}</td></tr>`);
+    const tweakRows = LAB.tweaks.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`);
+    const leverRows = LAB.levers.map(r => `<tr><td><strong>${r[0]}</strong></td><td>${r[1]}</td><td>${r[2]}</td></tr>`);
+
+    box.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><h2>Match Lab</h2><span class="hint" style="margin:0"><a href="https://github.com/caiograco289/Fm-Match-Lab" target="_blank" rel="noopener">Fm-Match-Lab</a>: real FM27 matches replayed on the game's own engine (27.0.1), one change at a time - over 250,000 matches</span></div>
+        <p class="hint">Points per game (ppg) unless marked; +0.1 ppg is about 4 points over a season. Most results come from one club's real matches (a promoted Premier League side, mostly against stronger teams) - a dominant side may see different sizes. The tactic league and tweak tests used neutral, equal squads.</p>
+        ${ctx ? `<h3>Your squad against the evidence</h3>${checks}` : '<p class="hint">Scan the game (or import a squad) to check your own squad against the evidence.</p>'}
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>The levers, measured</h2></div>
+        ${miniTable(['What', 'Effect in a match', 'In practice'], leverRows)}
+      </div>
+      <div class="info-grid">
+        <div class="panel">
+          <div class="panel-head"><h2>Attributes the engine rewards</h2></div>
+          <p class="hint">Studies 1-2: each attribute moved by ±5 for a whole squad. These are the weights behind Impact and the match-engine half of every rating. Everything else - Passing, Technique, First Touch, Crossing, Off The Ball, Tackling, Marking, Positioning, Decisions, Teamwork, Flair - showed no clear effect; goalkeeper Kicking was negative (real squads only).</p>
+          ${miniTable(['Attribute', 'xGD / point ×100', 'ppg for +5 (squad)', 'Season pts for +5 (squad)'], attrRows)}
+          <p class="hint" style="margin-top:6px"><strong>Over a season</strong> (harvestgreen22's in-game season tests): the same top four - Pace, Acceleration, Stamina, Jumping Reach. Natural Fitness (15%) and Pressure (21% of win rate from 1 to 18) mattered there but not inside a match: they act between matches (recovery, form). Natural Fitness counts in the app's Availability; Pressure's season effect isn't confirmed yet. Work Rate and Agility did nothing above 12.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Tactical familiarity</h2></div>
+          <p class="hint">Study 3: every player's eight tactical areas held at one level (the squad's own were about 40-60). An S-curve with a ceiling: 90 and 100 play identically.</p>
+          ${miniTable(['Area level', 'ppg', 'xG difference'], famRows)}
+          <ul class="lab-list">
+            <li>Training counts twice as much as match exposure; each match adds about 2 to exposure.</li>
+            <li>Training fades between sessions (about half after three weeks): keep training the tactic.</li>
+            <li>Raising one area on its own does almost nothing - the effect is spread over all eight (pressing intensity matters most when untrained, for a pressing team).</li>
+            <li>Attributes and familiarity add up: good players are worth the same with a new tactic (Study 4).</li>
+          </ul>
+        </div>
+      </div>
+      <div class="info-grid">
+        <div class="panel">
+          <div class="panel-head"><h2>Tactic league</h2></div>
+          <p class="hint">Study 7b: 18 tactics, the same synthetic Premier League mid-table squad on every side, familiarity 70 for all, 20 seasons home and away. xPts = expected points from both sides' xG (steadier). Gaps of 0.1 ppg are real; the top three are level.</p>
+          ${miniTable(['#', 'Tactic', '', 'ppg', 'xPts'], leagueRows)}
+          <ul class="lab-list">
+            <li>Every community tactic beat every preset, in both leagues (Study 7 and 7b) and on the club's real matches (Study 6).</li>
+            <li>No rock-paper-scissors: a tactic's overall strength predicted its results against every style. Switching tactic for each opponent buys little.</li>
+            <li>Among presets, Gegenpress and Fluid Counter-Attack lead; another tester found Wing Play strongest in its 4-2-4 shape. The defensive presets concede no fewer goals and score far fewer.</li>
+            <li>Some tactics lose much more than others when unfamiliar (Study 6): the strongest kept their place.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>In-match Tactical Tweaks</h2></div>
+          <p class="hint">Study 8, each tweak applied from kick-off. "Neutral" = every preset as the base tactic against four opponents (xPts per game); "high-tempo tactic" = the club's own pressing 4-2-4 against the ten presets.</p>
+          ${miniTable(['Tweak', 'Neutral (xPts)', 'High-tempo tactic', 'Reading'], tweakRows)}
+          <p class="hint" style="margin-top:6px">A tweak moves instructions one step, so what it does depends on where your tactic starts: pushing a tactic already at an extreme costs. Only applied from kick-off so far - late-game use (protecting a lead, chasing a game) is untested.</p>
+        </div>
       </div>`;
   }
 
@@ -1866,6 +2059,7 @@
       financial: { btn: el.tabBtnFinancial, panel: el.tabFinancial },
       scouting: { btn: el.tabBtnScouting, panel: el.tabScouting },
       world: { btn: el.tabBtnWorld, panel: el.tabWorld },
+      matchLab: { btn: el.tabBtnMatchLab, panel: el.tabMatchLab },
     };
 
     Object.keys(tabs).forEach(name => {
@@ -1908,6 +2102,14 @@
     if (el.tabBtnTeamInfo) el.tabBtnTeamInfo.addEventListener('click', () => switchTab('teamInfo'));
     if (el.tabBtnYoungsters) el.tabBtnYoungsters.addEventListener('click', () => switchTab('youngsters'));
     if (el.tabBtnWorld) el.tabBtnWorld.addEventListener('click', () => switchTab('world'));
+    if (el.tabBtnMatchLab) el.tabBtnMatchLab.addEventListener('click', () => switchTab('matchLab'));
+    // links inside the tabs that open another tab ("see the Match Lab tab")
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest ? e.target.closest('[data-goto]') : null;
+      if (!a) return;
+      e.preventDefault();
+      switchTab(a.getAttribute('data-goto'));
+    });
     if (el.autoRolesBtn) el.autoRolesBtn.addEventListener('click', autoPickRoles);
     if (el.hiddenSelect) {
       try { const saved = localStorage.getItem('fm27plus.hidden'); if (saved && HIDDEN_STRENGTH[saved] !== undefined) el.hiddenSelect.value = saved; } catch (e) { /* storage unavailable */ }
