@@ -179,12 +179,12 @@ PATH and builds in its own environment, `.build-venv`, which it sets up from `re
 | **Squad Depth** | Top three players for every slot of your tactic, nobody used twice |
 | **Tactical Fit** | The best XI (an optimal assignment, not a greedy pick), plus the **bench** (reserve keeper first, then the player who covers the most ground) and the **rotation XI** (each slot's second choice), then a ranked table per slot |
 | **Tactic Advisor** | Scores your pitch tactic, every saved formation and eight presets (4-2-3-1, 4-3-3, 4-4-2, 4-1-4-1, 4-3-2-1, 3-5-2, 3-4-3, 5-3-2) by the best XI your squad can field in them. Presets use the roles that suit your squad best; **Use on pitch** loads one |
-| **Team Info** | Squad at a glance: the stars, brightest prospects, who to loan out for minutes, who needs a new contract, surplus players, injuries |
+| **Team Info** | Squad at a glance: what the match engine rewards (out-of-position starters, the XI on the top attributes, the biggest levers), the stars, brightest prospects, who to loan out for minutes, who needs a new contract, surplus players, injuries |
 | **Youngsters** | Everyone 19 / 21 / 23 or under with CA, PA, best roles, current vs potential rating, a growth score and a verdict (*Wonderkid*, *Future star*, *Future starter*, *Squad player*, *Ready now*), and a **future XI** built from them by potential |
 | **Potential** | How good each squad player could become in each slot (PA ceiling, age, growth attributes) |
 | **Player Search** | One player: attributes, a **hidden profile** (personality, hidden attributes, estimated tactical understanding / buy-in), and his best roles in every position |
 | **Financial** | Surplus players by transfer value |
-| **Scouting** | The scouting pool ranked against your tactic, with a *Hidden* column |
+| **Scouting** | The scouting pool ranked against your tactic, with *Impact* (match-engine fit, sortable) and *Avail.* columns |
 | **World** | The world's best players (by ability) or the next generation (best young potentials) from the whole database, filterable by position / age / nation |
 
 ## How the scoring works (FM27)
@@ -206,30 +206,54 @@ order 92-95% of the time and picked a top-rated role every time, while every att
 beyond the key ones - preferable ones included - made the match worse. So preferable
 attributes only count as a small tie-breaker (5%), and nothing else is mixed in.
 
+**Match-engine fit** is what the match itself rewards, from
+[Fm-Match-Lab](https://github.com/caiograco289/Fm-Match-Lab): six studies that replayed real FM27
+matches on the game's own engine (27.0.1) about 190,000 times, changing one thing at a time. Each
+attribute moved by 5 points for a whole squad was worth, in expected-goal difference per game
+per point: Pace 0.10 (+0.03 in finishing), Acceleration 0.09, Jumping Reach 0.07, Stamina 0.06,
+Anticipation 0.05, Dribbling 0.05, Concentration 0.04, Finishing 0.04 (it converts chances rather
+than creating them), Balance 0.03, Composure 0.03, Work Rate 0.02 and Vision 0.02. Everything else -
+Passing, Technique, First Touch, Crossing, Tackling, Marking, Positioning, Decisions, Teamwork, Flair... -
+showed no clear effect. The match-engine fit is his attributes weighted by those values (1-20 scale,
+`ENGINE_WEIGHTS` in `engine.js`), shown as **Impact** (0-100) in Scouting and World and broken down on the
+Player Search page. The engine plays on attributes, not on CA, so a high Impact with a modest CA or
+value is a bargain.
+
 A slot's **rating** is then:
 
-> (50% in-possession fit + 50% out-of-possession fit) x **position familiarity** x
-> footedness x **hidden factors** (x potential, if "Factor in potential" is ticked)
+> (**ratings blend** of role fit and match-engine fit − **position cost**) x footedness x
+> **availability** (x potential, if "Factor in potential" is ticked)
 
-- *Position familiarity* uses the game's own 1-20 position ratings (Natural 20,
-  Accomplished 15-19, Competent 10-14, Unconvincing 5-9, Awkward 2-4, Ineffectual 1): about
-  x1.00 at 20, x0.92 at 15, x0.81 at 10, x0.70 at 5, x0.60 at 1.
+- **Ratings** (toolbar): *Blend* (default) = half role fit (50% in-possession + 50% out-of-possession),
+  half match-engine fit; *Role fit* = the game's star ratings alone (the old behaviour); *Match engine*
+  = the studies alone. The studies changed whole squads and aren't split by position (Dribbling on a
+  centre-back isn't worth what it is on a winger), which is why the default keeps the role fit too.
+  Goalkeepers always use the role fit.
+- **Position cost** uses the game's own 1-20 position ratings (Natural 20, Accomplished 15-19,
+  Competent 10-14, Unconvincing 5-9, Awkward 2-4, Ineffectual 1) and takes attribute points off the
+  fit: 0 at 20, 0.5 at 15, 2.0 at 10, 4.5 at 5, 7.2 at 1. Calibrated on the studies: capping a team's
+  starters at 15 in their positions cost 0.26 points per game, at 10 cost 0.85.
 - *Footedness*: wide roles that overlap or cross want the matching foot, inside roles
   (Inside Forward, Inside Winger, Wide Forward) the other one; worth at most about 7%.
-- **Hidden factors** (toolbar: Off / Low +-5% / **Normal +-10%** / High +-18%). FM27's
-  Tactical Effectiveness is built from player ability, **tactical understanding**,
-  **player buy-in** and more. The game keeps those out of reach of a memory read, so they
-  are *estimated* from the attributes and personality that drive them, each 0-1:
-  understanding (adaptability, decisions, team work, anticipation, concentration), buy-in
-  (professionalism, adaptability, loyalty, temperament, determination), reliability
-  (consistency, important matches, pressure), availability (injury proneness, natural
-  fitness) and discipline (temperament, sportsmanship, dirtiness, controversy). A player
-  whose combined profile is better or worse than an ordinary professional's has his rating
-  moved by up to the chosen strength. Every row shows the effect (e.g. +2.4%); hover it
-  for the five estimates. Note the personality byte order is partly inferred (Ambition,
-  Loyalty, Professionalism and Controversy are confirmed against the game's labels).
+- **Availability** (toolbar: Off / Low ±3% / **Normal ±5%** / High ±10%): Injury Proneness and Natural
+  Fitness, which decide how often a player is fit and sharp. In the studies match sharpness at 50% cost
+  a full point per game and condition at 80% cost 0.8, while consistency, important matches,
+  determination, buy-in, current ability, reputation and most personality fields made no measurable
+  difference in a match (Natural Fitness isn't even read during one). So availability is the only
+  hidden factor left in the rating. The player profile still shows the rest, plus his **tactical
+  ability** by the game's own formula (median of Anticipation, Decisions, Composure, Concentration
+  and Versatility, minus 1, × 100/19).
 - The **Best XI** is a true best-value assignment (Hungarian algorithm), so the first slot
   can no longer take a player who is worth more somewhere else.
+
+**Team Info** has a *What the match engine rewards* panel built on the same studies: starters
+playing out of position with their estimated cost in league points, the XI's averages and weakest
+links on the attributes the engine values most, a note when the keeper's Kicking is high (the one
+clearly negative attribute), and the biggest levers with their measured size (sharpness and
+condition, positions, tactical familiarity, letting the assistant rather than the AI manage the
+match, team cohesion, mentality, presets). The **Tactic Advisor** adds a rough points-per-game gap to
+your tactic and the studies' warning that an untrained tactic costs about 0.4 points a game. All the
+studies come from one club (a promoted Premier League side), so the sizes are a guide.
 
 The "Hide unfamiliar-position players" box removes anyone rated below Competent (under 10)
 for the slot. **Auto-pick roles** sets every slot to the in- and out-of-possession roles
@@ -238,8 +262,9 @@ that suit your squad's best players for it.
 ## Extending it
 
 - Roles and their attributes: `ROLE_DATA` / `ROLE_LISTS` at the top of `engine.js`.
-- Rating mix and penalties: `PREF_WEIGHT`, `familiarityPenalty`, `HIDDEN_STRENGTH` and
-  `hiddenProfile` in `engine.js`; formation presets: `PRESET_FORMATIONS`.
+- Rating mix and penalties: `PREF_WEIGHT`, `ENGINE_WEIGHTS` / `ENGINE_PPG` (the Fm-Match-Lab values),
+  `RATING_MODELS`, `positionCost20`, `HIDDEN_STRENGTH` and `hiddenProfile` in `engine.js`; formation
+  presets: `PRESET_FORMATIONS`.
 - Everything on screen: `app.js` / `index.html` / `styles.css`. `roles-data.js` is a leftover
   from the first version and is no longer used.
 
@@ -257,7 +282,7 @@ text is used instead), and no World tab; everything else works the same.
 | `fm26mem/` | The read-only memory reader (`layout.py` has every offset) |
 | `index.html` | Page structure |
 | `styles.css` | All visual styling |
-| `engine.js` | Roles, scoring, familiarity, hidden factors, XI assignment, bench, formation comparison (no DOM) |
+| `engine.js` | Roles, scoring (role fit, match-engine fit), position cost, availability, XI assignment, bench, formation comparison (no DOM) |
 | `app.js` | Wires the engine to the page - pitch, tabs, rendering |
 | `memory-bridge.js` | Talks to the app's API and converts players for the engine |
 | `build_exe.bat` | Builds `dist\FM27Plus.exe` |
