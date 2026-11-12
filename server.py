@@ -186,6 +186,10 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:       # never let the injury read stop the squad from loading; the rows just carry no flag
                         traceback.print_exc()
                     idx = snap.squad_indices(include_loaned_out=q.get('includeLoanedOut', ['0'])[0] == '1')
+                    try:
+                        snap.refresh_fitness(idx)   # today's condition / sharpness, even if the scan is days old
+                    except Exception:               # the values from the scan are still there
+                        traceback.print_exc()
                     players = players_payload(idx)
                 return self._json({'players': players})
             if path == '/api/pool':

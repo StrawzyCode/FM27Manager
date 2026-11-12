@@ -61,6 +61,8 @@
     hideInjuredToggle: document.getElementById('hideInjuredToggle'),
     hideInjuredLabel: document.getElementById('hideInjuredLabel'),
     hideInjuredCount: document.getElementById('hideInjuredCount'),
+    fitnessToggle: document.getElementById('fitnessToggle'),
+    fitnessLabel: document.getElementById('fitnessLabel'),
     tabBtnSquadDepth: document.getElementById('tabBtnSquadDepth'),
     tabBtnTacticalFit: document.getElementById('tabBtnTacticalFit'),
     tabBtnPotential: document.getElementById('tabBtnPotential'),
@@ -210,6 +212,49 @@
       el.hideInjuredCount.textContent = known ? ` (${n} injured)` : '';
     }
   }
+
+  // --- Today's fitness: condition and match sharpness (live data only; a CSV import doesn't carry them) ---
+
+  function squadHasFitness() {
+    return !!(squad && squad.players.some(p => typeof p.condition === 'number'));
+  }
+
+  /** Is "Use today's fitness" on, with something for it to use? */
+  function useTodaysFitness() {
+    return !!(el.fitnessToggle && el.fitnessToggle.checked && squadHasFitness());
+  }
+
+  /** The toolbar options for rating our own squad for today's match: rankOptions() plus today's fitness. */
+  function squadOptions() {
+    return Object.assign(rankOptions(), { fitness: useTodaysFitness() });
+  }
+
+  function updateFitnessToggle() {
+    if (!el.fitnessLabel) return;
+    el.fitnessLabel.hidden = !(squadHasFitness() && ['squadDepth', 'tacticalFit', 'tactics', 'teamInfo'].includes(currentTab));
+  }
+
+  // Colours roughly follow the game's own icons: its heart drops from "Excellent" to "Good" at about 86% and to
+  // "Fair" below 75%; the sharpness tick needs about 85%, and below 60% it reads "Lacking Sharpness".
+  function fitClass(v, ok, low) {
+    return v >= ok ? 'fit-ok' : (v >= low ? 'fit-mid' : 'fit-low');
+  }
+
+  /** "Condition / sharpness" cell, with what they cost in the tooltip. */
+  function fitnessHtml(player) {
+    if (!player || typeof player.condition !== 'number') return '<span style="color:var(--muted-2)">—</span>';
+    const con = player.condition;
+    const shp = typeof player.sharpness === 'number' ? player.sharpness : null;
+    const f = fitnessCost(player);
+    const cost = f.cost20 >= 0.05
+      ? `: costs his team about ${(-f.ppg).toFixed(2)} points per game, like ${f.cost20.toFixed(1)} off every attribute${useTodaysFitness() ? '' : ' (tick "Use today\'s fitness" to count it)'}`
+      : ': fully fit';
+    const tip = `Condition ${Math.round(con)}% · match sharpness ${shp === null ? '?' : Math.round(shp) + '%'} today${cost}`;
+    const shpHtml = shp === null ? '—' : `<span class="${fitClass(shp, 85, 60)}">${Math.round(shp)}%</span>`;
+    return `<span class="fit-tag" title="${esc(tip)}"><span class="${fitClass(con, 86, 75)}">${Math.round(con)}%</span> / ${shpHtml}</span>`;
+  }
+
+  const FIT_TH = '<th title="Condition / match sharpness today, read from the game">Con / Shp</th>';
 
   function potentialHtml(val) {
     if (val === null || val === undefined) return '<span style="color:var(--muted-2)">—</span>';
@@ -461,7 +506,9 @@
     const hideForeign = el.relatedOnlyToggle ? el.relatedOnlyToggle.checked : false;
     const hideInjured = el.hideInjuredToggle ? el.hideInjuredToggle.checked : false;
     const options = rankOptions();
+    const squadOpts = squadOptions();            // + today's fitness, for our own squad only
     updateInjuredToggle();
+    updateFitnessToggle();
 
     // --- Main squad (Squad Depth + Tactical Fit tabs) ---
     if (!squad || activeSlots.length === 0) {
@@ -477,7 +524,7 @@
 
       const rankedSlots = activeSlots.map(slot => {
         const role = slotRole(slot);
-        let ranked = rankPlayersForSlot(slot, role, squad.players, options);
+        let ranked = rankPlayersForSlot(slot, role, squad.players, squadOpts);
         if (hideForeign) {
           ranked = ranked.filter(r => !isUnfamiliar(r.familiarity));
         }
@@ -645,6 +692,7 @@
       </div>
     `;
 
+    const showFit = squadHasFitness();
     const rows = inPitchOrder(depthData.depthSlots, ds => ds.slot.positionCode).map(ds => {
       const posLabel = getPosLabel(ds.slot.positionCode);
       const roleLabel = ds.role ? ds.role.name : '';
@@ -655,7 +703,7 @@
           <td class="depth-player-cell">
             <div class="depth-player-card">
               <div class="p-name">${r.player.info.Player} <span class="p-age">(${r.player.info.Age || '—'})</span>${injuryTagHtml(r.player)}</div>
-              <div class="p-meta"><span class="score-pill">${r.score.toFixed(1)}</span> ${famTagHtml(r.familiarity)} ${potentialHtml(r.potential)}</div>
+              <div class="p-meta"><span class="score-pill">${r.score.toFixed(1)}</span> ${famTagHtml(r.familiarity)} ${potentialHtml(r.potential)}${showFit ? ' ' + fitnessHtml(r.player) : ''}</div>
             </div>
           </td>
         `;
@@ -688,6 +736,7 @@
 
   function renderBestXiTable(gridRanked, assignment) {
     if (!el.bestXiTable) return;
+    const showFit = squadHasFitness();
     const rows = inPitchOrder(gridRanked.map((gr, idx) => ({ gr, idx })), x => x.gr.slot.positionCode).map(({ gr, idx }) => {
       const assigned = assignment[idx];
       const posLabel = posLabelOf(gr.slot.positionCode);
@@ -697,7 +746,7 @@
         return `<tr>
           <td><strong>${posLabel}</strong></td>
           <td>${roleLabel}</td>
-          <td colspan="7" style="color:var(--muted)">No eligible player available</td>
+          <td colspan="${showFit ? 8 : 7}" style="color:var(--muted)">No eligible player available</td>
         </tr>`;
       }
 
@@ -706,6 +755,7 @@
         <td>${roleLabel}</td>
         <td><strong>${esc(assigned.player.info.Player)}</strong>${injuryTagHtml(assigned.player)}</td>
         <td>${assigned.player.info.Age || '—'}</td>
+        ${showFit ? `<td>${fitnessHtml(assigned.player)}</td>` : ''}
         <td><span class="score-pill">${assigned.score.toFixed(1)}</span></td>
         <td>${ipOopCell(assigned)}</td>
         <td>${famTagHtml(assigned.familiarity)}</td>
@@ -721,6 +771,7 @@
           <th>Roles (in / out of possession)</th>
           <th>Suggested Player</th>
           <th>Age</th>
+          ${showFit ? FIT_TH : ''}
           <th>Rating</th>
           <th>IP / OOP fit</th>
           <th>Familiarity</th>
@@ -739,12 +790,14 @@
     const panel = document.createElement('div');
     panel.className = 'panel slot-detail-panel';
 
+    const showFit = squadHasFitness();
     const topPlayers = rs.ranked.slice(0, topN || 10);
     const tableRows = topPlayers.map((r, i) => `
       <tr>
         <td>#${i + 1}</td>
         <td><strong>${esc(r.player.info.Player)}</strong>${injuryTagHtml(r.player)}</td>
         <td>${r.player.info.Age || '—'}</td>
+        ${showFit ? `<td>${fitnessHtml(r.player)}</td>` : ''}
         <td><span class="score-pill">${r.score.toFixed(1)}</span></td>
         <td>${ipOopCell(r)}</td>
         <td>${famTagHtml(r.familiarity)}</td>
@@ -764,6 +817,7 @@
               <th>#</th>
               <th>Player</th>
               <th>Age</th>
+              ${showFit ? FIT_TH : ''}
               <th>Score</th>
               <th>IP / OOP fit</th>
               <th>Familiarity</th>
@@ -771,7 +825,7 @@
               <th>Potential</th>
             </tr>
           </thead>
-          <tbody>${tableRows || '<tr><td colspan="8">No matching players found</td></tr>'}</tbody>
+          <tbody>${tableRows || `<tr><td colspan="${showFit ? 9 : 8}">No matching players found</td></tr>`}</tbody>
         </table>
       </div>
     `;
@@ -783,12 +837,14 @@
     if (!el.benchPanel || !el.benchBody) return;
     el.benchPanel.hidden = false;
     const bench = computeBench(rankedSlots, assignment, 9);
+    const showFit = squadHasFitness();
 
     const benchRows = bench.map((b, i) => `
       <tr>
         <td>S${i + 1}</td>
         <td><strong>${esc(b.player.info.Player)}</strong>${injuryTagHtml(b.player)}</td>
         <td>${b.player.info.Age || '—'}</td>
+        ${showFit ? `<td>${fitnessHtml(b.player)}</td>` : ''}
         <td>${posLabelOf(b.slot.positionCode)}</td>
         <td><span class="score-pill">${b.entry.score.toFixed(1)}</span></td>
         <td>${Math.round(b.cover * 100)}% of the starter</td>
@@ -801,6 +857,7 @@
         <td><strong>${posLabelOf(ds.slot.positionCode)}</strong></td>
         <td>${r ? `<strong>${esc(r.player.info.Player)}</strong>${injuryTagHtml(r.player)}` : '<span style="color:var(--muted-2)">—</span>'}</td>
         <td>${r ? (r.player.info.Age || '—') : ''}</td>
+        ${showFit ? `<td>${r ? fitnessHtml(r.player) : ''}</td>` : ''}
         <td>${r ? `<span class="score-pill">${r.score.toFixed(1)}</span>` : ''}</td>
         <td>${r ? famTagHtml(r.familiarity) : ''}</td>
       </tr>`;
@@ -811,14 +868,14 @@
         <div>
           <h3 class="sub-h">Bench</h3>
           <div class="table-wrap"><table class="results-table">
-            <thead><tr><th></th><th>Player</th><th>Age</th><th>Covers</th><th>Rating</th><th>Cover</th><th>Familiarity</th></tr></thead>
-            <tbody>${benchRows || '<tr><td colspan="7">Nobody left to name</td></tr>'}</tbody>
+            <thead><tr><th></th><th>Player</th><th>Age</th>${showFit ? FIT_TH : ''}<th>Covers</th><th>Rating</th><th>Cover</th><th>Familiarity</th></tr></thead>
+            <tbody>${benchRows || `<tr><td colspan="${showFit ? 8 : 7}">Nobody left to name</td></tr>`}</tbody>
           </table></div>
         </div>
         <div>
           <h3 class="sub-h">Rotation XI (second choices)</h3>
           <div class="table-wrap"><table class="results-table">
-            <thead><tr><th>Position</th><th>Player</th><th>Age</th><th>Rating</th><th>Familiarity</th></tr></thead>
+            <thead><tr><th>Position</th><th>Player</th><th>Age</th>${showFit ? FIT_TH : ''}<th>Rating</th><th>Familiarity</th></tr></thead>
             <tbody>${rotRows}</tbody>
           </table></div>
         </div>
@@ -1372,7 +1429,7 @@
   /** The XI and bench for the current tactic (or the best by ability when no tactic is set up yet). */
   function squadContext() {
     if (!squad || !squad.players.length) return null;
-    const options = rankOptions();
+    const options = squadOptions();
     const players = squad.players;
     const slots = Object.values(grid);
     let xi, bench, ev = null;
@@ -1413,8 +1470,10 @@
       candidates.push({ name: f.name, source: 'preset', slots: f.codes.map(code => suggestRoles(code, players, options)) });
     });
 
+    const fitness = useTodaysFitness();
+    const evalOptions = Object.assign({}, options, { fitness });       // the XI for today's match
     advisorResults = candidates.map(c => {
-      const ev = evaluateFormation(c.slots, players, options);
+      const ev = evaluateFormation(c.slots, players, evalOptions);
       return { c, ev, score: c.slots.length ? ev.total / c.slots.length : 0 };
     }).sort((a, b) => b.score - a.score);
 
@@ -1446,7 +1505,7 @@
     box.innerHTML = `
       <div class="panel">
         <div class="panel-head"><h2>Tactic Advisor</h2></div>
-        <p class="hint">Every formation scored by the best XI your squad can field in it (average rating of the eleven, with availability and position familiarity counted). Presets use the in- and out-of-possession roles that suit your squad best; your pitch tactic and saved formations keep the roles you chose. Injured players are ${hideInjured ? 'left out' : 'included (tick "Hide injured players" to leave them out)'}.</p>
+        <p class="hint">Every formation scored by the best XI your squad can field in it (average rating of the eleven, with availability and position familiarity counted). Presets use the in- and out-of-possession roles that suit your squad best; your pitch tactic and saved formations keep the roles you chose. Injured players are ${hideInjured ? 'left out' : 'included (tick "Hide injured players" to leave them out)'}.${fitness ? ' Today\'s condition and match sharpness are counted.' : ''}</p>
         <p class="hint"><strong>Before switching</strong> (Fm-Match-Lab, FM27's own engine): a tactic your players haven't trained costs about 0.4 points a game, and low against high familiarity was worth about 0.5 - as much as +7 Pace for the whole squad. Training it to about 75 in every area recovers that; more gains nothing, and training counts twice as much as playing matches with it. So a small gain on paper isn't worth a switch mid-season. In the same studies every installed FM preset style did worse than a tactic suited to the squad, and the defensive ones (Park the Bus, Catenaccio) were by far the worst.</p>
         <div class="table-wrap"><table class="results-table">
           <thead><tr><th></th><th>Formation</th><th>XI rating</th><th>Weakest link</th><th>Lineup</th><th></th></tr></thead>
@@ -1819,6 +1878,7 @@
     });
 
     updateInjuredToggle();
+    updateFitnessToggle();
     if (tabName === 'scouting' && scoutStale) rankScoutingSoon();
     if (tabName === 'world' && window.FM26Live && worldState.rows === null && !worldState.loading) worldLoad();
     renderExtraTab();
@@ -1927,6 +1987,14 @@
 
     if (el.hideInjuredToggle) {
       el.hideInjuredToggle.addEventListener('change', () => computeAndRender());
+    }
+
+    if (el.fitnessToggle) {
+      try { el.fitnessToggle.checked = localStorage.getItem('fm27plus.fitness') === '1'; } catch (e) { /* storage unavailable */ }
+      el.fitnessToggle.addEventListener('change', () => {
+        try { localStorage.setItem('fm27plus.fitness', el.fitnessToggle.checked ? '1' : '0'); } catch (e) { /* storage unavailable */ }
+        computeAndRender();
+      });
     }
 
     [el.scoutSearchInput, el.scoutMaxAgeInput, el.scoutMinScoreInput, el.scoutMinPotentialInput].forEach(input => {

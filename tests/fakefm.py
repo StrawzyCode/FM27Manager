@@ -1,6 +1,7 @@
 """A synthetic Football Manager process for testing FM27 Plus without the game (any OS).
 
-Builds a fake address space with the exact layout fm26mem expects (player record pages, names,
+Builds a fake address space with the exact layout fm26mem expects (player record pages with today's
+condition and match sharpness, names,
 nations, clubs, contracts, loans, an injury department list, recent-injury objects and relation
 lists with home-grown eligibility) and installs a stub `fm26mem.winmem` so the real reader and server
 run against it.
@@ -143,6 +144,7 @@ def build(seed=7):
     gd = GAME_DATE
     club_names = list(clubs)
     per_club = 120
+    fit_rnd = random.Random(seed + 1)     # its own stream, so the rest of the fake save stays as it was
     for k, r in enumerate(recs):
         p = {'rec': r, 'person': r + 0x140, 'idx': k}
         if k < per_club * len(club_names):
@@ -170,6 +172,10 @@ def build(seed=7):
         heap.w(r + 0xB8, 'HH', doy(gd), gd.year)
         heap.w(r + 0xE6, 'B', rnd.randint(168, 196))
         heap.w(r + 0xEC, 'I', int(ca ** 3 * 2))
+        # today's match sharpness and condition, 0..10000; the i16 between them is the sharpness trend
+        sharp, cond = fit_rnd.choice([10000, fit_rnd.randint(3500, 9999)]), fit_rnd.choice([10000, fit_rnd.randint(6000, 9999)])
+        heap.w(r + 0x110, 'HhH', sharp, fit_rnd.randint(-500, 120), cond)
+        p['sharpness'], p['condition'] = sharp, cond
         heap.w(r + 0x116, 'HHH', int(rep_cur * 0.9), rep_cur, rep_world)
         heap.w(r + 0x11C, 'HH', ca, pa)
         heap.w(r + 0x140, 'Q', VT_PERSON)
