@@ -160,9 +160,26 @@ function familiarityTier(r) {
   return { tier: 'ineffectual', label: 'Ineffectual' };
 }
 
-/** How much of his ability a player brings to a position: 1.00 at 20, about 0.92 at 15, 0.81 at 10, 0.60 at 1. */
+/** What playing a position costs, in attribute points (on the 1-20 scale) off his rating there: 0 at 20, 0.5 at 15,
+ * 2.0 at 10, 4.5 at 5, 7.2 at 1. Calibrated on Fm-Match-Lab Study 5 (FM27 27.0.1, 300 replays per condition):
+ * capping a team's starters at 15 in their positions cost 0.26 points per game (-0.22 xGD), capping them at 10 cost
+ * 0.85 (-1.03 xGD) - about half a point and two points on every attribute the engine rewards. So Accomplished costs
+ * little and the cost then grows quickly; nothing was measured below 10, the curve just continues. */
+const POSITION_COST_AT_10 = 2.0;
+function positionCost20(r) {
+  const gap = (20 - clamp(r, 1, 20)) / 10;
+  return POSITION_COST_AT_10 * gap * gap;
+}
+
+/** The same cost as a multiplier for a typical player (fit 13/20) - for the places that need a factor. */
 function familiarityPenalty(r) {
-  return 1 - 0.40 * Math.pow((20 - clamp(r, 1, 20)) / 19, 1.2);
+  return 1 - positionCost20(r) / 13;
+}
+
+/** A 1-20 fit after the position cost (a CSV import, which has no 1-20 ratings, keeps its tier multiplier). */
+function applyPosition(fit20, fam) {
+  if (fit20 === null || fit20 === undefined) return fit20;
+  return fam && fam.cost20 !== undefined ? Math.max(1, fit20 - fam.cost20) : fit20 * (fam ? fam.penalty : 1);
 }
 
 /** Out of position = Unconvincing or worse (below 10): what the "hide unfamiliar" switch removes. */
@@ -175,7 +192,8 @@ function familiarityFor(player, positionCode) {
     const code = SLOT_TO_RATING[positionCode] || 'MC';
     const r = player.ratings[RATING_INDEX[code]] || 1;
     const t = familiarityTier(r);
-    return { tier: t.tier, label: t.label, rating: r, penalty: Math.round(familiarityPenalty(r) * 1000) / 1000 };
+    return { tier: t.tier, label: t.label, rating: r, cost20: Math.round(positionCost20(r) * 100) / 100,
+      penalty: Math.round(familiarityPenalty(r) * 1000) / 1000 };
   }
   return calculateFamiliarity(player.info.Position, positionCode);     // CSV import: position text only
 }
@@ -220,16 +238,30 @@ function footMultiplierFor(player, slotSide, ipRole) {
   return clamp(0.93 + ((relevant - 10) / 10) * 0.07, 0.90, 1.07);
 }
 
-// --- Hidden factors ---
+// --- Hidden factors: availability ---
 //
-// FM27's Tactical Effectiveness is built from Player Ability (how well his attributes suit the role), Tactical
-// Understanding (how quickly he learns your concepts), Player Buy-In (whether he believes in the plan), plus
-// consistency and availability. The game keeps the last three out of reach of a memory read, so they are
-// estimated from the hidden attributes and personality that drive them (each 0-1). A player's rating is
-// scaled by how far his overall hidden profile sits from an ordinary professional's, up to the strength set
-// in the toolbar (off / low / normal / high).
-const HIDDEN_STRENGTH = { off: 0, low: 0.05, normal: 0.10, high: 0.18 };
+// Fm-Match-Lab's studies (FM27 27.0.1, real matches replayed thousands of times) found no in-match effect from
+// most of what is hidden: Consistency, Important Matches, Determination, Decisions, Versatility, current ability,
+// reputation, Player Buy-In and most personality fields all moved nothing measurable, and Natural Fitness is not read
+// during a match at all. What does matter enormously is a player's state going into it - match sharpness at 50% cost a
+// full point per game, condition at 80% cost 0.8 (Study 5) - and over a season that depends on staying fit and
+// recovering: Injury Proneness and Natural Fitness. So the only hidden adjustment left is that availability, up to the
+// strength set in the toolbar. The rest is still shown on the player's profile, but no longer moves his rating.
+const HIDDEN_STRENGTH = { off: 0, low: 0.03, normal: 0.05, high: 0.10 };
 const HIDDEN_NEUTRAL = 0.60;
+
+/** The game's own Player Tactical Ability (0-100): the median of Anticipation, Decisions, Composure, Concentration
+ * and Versatility on the 1-20 scale, minus 1, times 100/19. Decoded from the match engine's effectiveness record and
+ * exact for all 44 players checked (Fm-Match-Lab Study 3). It feeds tactical familiarity, but only through the median. */
+function tacticalAbility(player) {
+  const v = vecOf(player);
+  const xs = ['Anticipation', 'Decisions', 'Composure', 'Concentration', 'Versatility']
+    .map(n => v[ATTR_INDEX[attrKey(n)]]).filter(x => x === x);
+  if (xs.length < 3) return null;
+  xs.sort((a, b) => a - b);
+  const m = xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2;
+  return Math.round(clamp((m - 1) * 100 / 19, 0, 100));
+}
 
 function hiddenProfile(player) {
   if (player._hp) return player._hp;
@@ -243,24 +275,78 @@ function hiddenProfile(player) {
     return w > 0 ? s / w / 20 : null;
   };
   const p = {
-    reliability: mix([[at('Consistency'), 0.4], [at('Important Matches'), 0.3], [pe('Pressure'), 0.3]]),
-    understanding: mix([[pe('Adaptability'), 0.3], [at('Decisions'), 0.2], [at('Team Work'), 0.2], [at('Anticipation'), 0.15], [at('Concentration'), 0.15]]),
-    buyIn: mix([[pe('Professionalism'), 0.35], [pe('Adaptability'), 0.2], [pe('Loyalty'), 0.15], [pe('Temperament'), 0.15], [at('Determination'), 0.15]]),
     availability: mix([[inv(at('Injury Proneness')), 0.6], [at('Natural Fitness'), 0.4]]),
-    discipline: mix([[pe('Temperament'), 0.35], [pe('Sportsmanship'), 0.25], [inv(at('Dirtiness')), 0.2], [inv(pe('Controversy')), 0.2]]),
+    tacticalAbility: tacticalAbility(player),
+    // shown for interest only: the game's panel counts it, the match showed no effect from it (Study 3)
+    buyIn: mix([[pe('Professionalism'), 0.35], [pe('Adaptability'), 0.2], [pe('Loyalty'), 0.15], [pe('Temperament'), 0.15], [at('Determination'), 0.15]]),
   };
-  const part = (x) => (x === null ? HIDDEN_NEUTRAL : x);
-  p.composite = 0.30 * part(p.reliability) + 0.25 * part(p.understanding) + 0.25 * part(p.buyIn)
-    + 0.10 * part(p.availability) + 0.10 * part(p.discipline);
+  p.composite = p.availability === null ? HIDDEN_NEUTRAL : p.availability;
   player._hp = p;
   return p;
 }
 
-/** 1.00 for an ordinary profile; up to 1 +/- strength for an exceptional / poor one. */
+/** 1.00 for ordinary availability; up to 1 +/- strength for an exceptionally robust / fragile player. */
 function hiddenMultiplier(player, strength) {
   if (!strength) return 1;
   const c = hiddenProfile(player).composite;
   return 1 + strength * clamp((c - HIDDEN_NEUTRAL) / 0.40, -1, 1);
+}
+
+// --- What the match engine rewards (Fm-Match-Lab, https://github.com/caiograco289/Fm-Match-Lab) ---
+//
+// Studies 1 and 2 moved each attribute by -5 and +5 for a whole squad and replayed ten real matches 30 times each on
+// FM27's own engine (27.0.1; 27.0 agrees at r = 0.98). The weight is the effect on the team's xG difference per
+// in-game point, kept only where it is clear (|t| >= 2) and the same on both engine versions. Finishing barely changes
+// xG but converts chances (+0.04 goals above xG per point), and Pace converts too (+0.03), so that is added. Everything
+// else - Passing, Technique, First Touch, Crossing, Tackling, Marking, Positioning, Decisions, Teamwork, Flair... -
+// showed no clear effect. These are whole-squad, position-free values from one club (a promoted Premier League side),
+// so by default they are blended with the role fit rather than replacing it (see RATING_MODELS).
+const ENGINE_WEIGHTS = {
+  'Pace': 0.132, 'Acceleration': 0.094, 'Jumping Reach': 0.068, 'Stamina': 0.059, 'Anticipation': 0.049,
+  'Dribbling': 0.047, 'Concentration': 0.044, 'Finishing': 0.040, 'Balance': 0.033, 'Composure': 0.028,
+  'Work Rate': 0.021, 'Vision': 0.018,
+};
+// Points per game for the whole squad per in-game point of each weighted attribute (Study 1, same order); summed, one
+// point on all of them is worth about 0.36 points per game for a team, so about 0.032 for one starter.
+const ENGINE_PPG = {
+  'Pace': 0.071, 'Acceleration': 0.066, 'Jumping Reach': 0.033, 'Stamina': 0.036, 'Anticipation': 0.023,
+  'Dribbling': 0.034, 'Concentration': 0.018, 'Finishing': 0.021, 'Balance': -0.004, 'Composure': 0.016,
+  'Work Rate': 0.025, 'Vision': 0.016,
+};
+const STARTER_PPG_PER_POINT = Object.values(ENGINE_PPG).reduce((a, b) => a + b, 0) / 11;
+const ENGINE_IDX = Object.keys(ENGINE_WEIGHTS).map(n => [ATTR_INDEX[attrKey(n)], ENGINE_WEIGHTS[n], n]);
+
+/** How much of the rating comes from the match-engine fit: 0 = role fit only (the game's star ratings), 1 = engine
+ * fit only. Goalkeepers always use the role fit: the studies changed whole squads, so they say little about keepers. */
+const RATING_MODELS = { role: 0, blend: 0.5, engine: 1 };
+
+/** Match-engine fit on the 1-20 scale: his attributes weighted by what they are worth in a match (ENGINE_WEIGHTS).
+ * Null when less than half of that weight is known (a CSV export without those columns). */
+function engineFit20(player) {
+  if (player._ef !== undefined) return player._ef;
+  const v = vecOf(player);
+  let s = 0, w = 0, total = 0;
+  for (let i = 0; i < ENGINE_IDX.length; i++) {
+    const [idx, wt] = ENGINE_IDX[i];
+    total += wt;
+    const x = v[idx];
+    if (x === x) { s += x * wt; w += wt; }
+  }
+  player._ef = w >= total / 2 ? s / w : null;
+  return player._ef;
+}
+
+/** The attributes behind a player's engine fit, biggest share first: [{name, value, weight, share}]. */
+function engineDrivers(player) {
+  const v = vecOf(player);
+  const out = [];
+  ENGINE_IDX.forEach(([idx, wt, name]) => {
+    const x = v[idx];
+    if (x === x) out.push({ name, value: x, weight: wt });
+  });
+  const tot = out.reduce((s, d) => s + d.weight * d.value, 0) || 1;
+  out.forEach(d => { d.share = d.weight * d.value / tot; });
+  return out.sort((a, b) => b.weight - a.weight);
 }
 
 // --- Position Familiarity & Penalty System ---
@@ -495,7 +581,8 @@ function potentialMultiplierFor(potential) {
 // --- Slot scoring ---
 //
 // A slot's rating is how well a player's attributes suit its in-possession role and its out-of-possession role,
-// scaled by his familiarity with the position, his footedness, his hidden profile and (optionally) potential.
+// blended with what the match engine rewards (engineFit20, see RATING_MODELS), less what playing that position costs
+// him (positionCost20), scaled by his footedness, his availability and (optionally) potential.
 //
 // Role fit = the average of the role's KEY attributes. Checked against the game's own star ratings for 20 role
 // lists (6 players, every role at every position they can play), the key-attribute average put the roles in the
@@ -526,6 +613,7 @@ function calculateSlotScore(player, slot, options) {
   const opts = options || {};
   const strength = opts.hidden === undefined ? HIDDEN_STRENGTH.normal : opts.hidden;
   const ipWeight = opts.ipWeight === undefined ? 0.5 : opts.ipWeight;
+  const engineShare = opts.engineShare === undefined ? RATING_MODELS.blend : opts.engineShare;
   const role = slotRole(slot);
   const familiarity = familiarityFor(player, slot.positionCode);
   const potential = cachedStars(player, 'Potential');
@@ -535,18 +623,21 @@ function calculateSlotScore(player, slot, options) {
   const oopFit = roleFit20(player, role.oop);
   if (ipFit === null && oopFit === null) return { score: null, familiarity, potential, ability };
 
-  const base20 = ipFit === null ? oopFit : (oopFit === null ? ipFit : ipWeight * ipFit + (1 - ipWeight) * oopFit);
+  const roleBase = ipFit === null ? oopFit : (oopFit === null ? ipFit : ipWeight * ipFit + (1 - ipWeight) * oopFit);
   const slotMeta = POSITION_SLOT_MAP[slot.positionCode] || {};
+  const engineFit = slotMeta.group === 'GK' ? null : engineFit20(player);
+  const base20 = engineFit === null || !engineShare ? roleBase : (1 - engineShare) * roleBase + engineShare * engineFit;
   const foot = footMultiplierFor(player, slotSideFor(slot.positionCode, slotMeta.group), role.ip);
   const hidden = hiddenMultiplier(player, strength);
   const potentialMultiplier = opts.factorPotential ? potentialMultiplierFor(potential) : 1.0;
 
-  const finalScore = (base20 / 20) * 100 * familiarity.penalty * foot * hidden * potentialMultiplier;
+  const finalScore = (applyPosition(base20, familiarity) / 20) * 100 * foot * hidden * potentialMultiplier;
   return {
     score: Math.round(finalScore * 10) / 10,
     familiarity,
     ipFit: ipFit === null ? null : Math.round((ipFit / 20) * 1000) / 10,
     oopFit: oopFit === null ? null : Math.round((oopFit / 20) * 1000) / 10,
+    engineFit: engineFit === null ? null : Math.round((engineFit / 20) * 1000) / 10,
     hiddenMultiplier: hidden,
     potential,
     ability,
@@ -561,7 +652,7 @@ function rankPlayersForSlot(slot, role, players, options) {
     if (result.score === null) continue;
     ranked.push({
       player, score: result.score, familiarity: result.familiarity, ipFit: result.ipFit, oopFit: result.oopFit,
-      hiddenMultiplier: result.hiddenMultiplier, potential: result.potential, ability: result.ability,
+      engineFit: result.engineFit, hiddenMultiplier: result.hiddenMultiplier, potential: result.potential, ability: result.ability,
     });
   }
   return ranked.sort((a, b) => b.score - a.score);
@@ -937,7 +1028,7 @@ function suggestRoles(positionCode, players, options, depth) {
       const vals = [];
       players.forEach(p => {
         const f = roleFit20(p, role);
-        if (f !== null) vals.push(f * familiarityFor(p, positionCode).penalty);
+        if (f !== null) vals.push(applyPosition(f, familiarityFor(p, positionCode)));
       });
       vals.sort((a, b) => b - a);
       const top = vals.slice(0, n);

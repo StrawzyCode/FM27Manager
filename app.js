@@ -99,6 +99,7 @@
     editorOopRole: document.getElementById('editorOopRole'),
     editorKeyAttrs: document.getElementById('editorKeyAttrs'),
     hiddenSelect: document.getElementById('hiddenSelect'),
+    ratingModelSelect: document.getElementById('ratingModelSelect'),
     benchPanel: document.getElementById('benchPanel'),
     benchBody: document.getElementById('benchBody'),
     tabBtnTactics: document.getElementById('tabBtnTactics'),
@@ -140,11 +141,22 @@
   /** The engine options currently set in the toolbar. */
   function rankOptions() {
     const key = el.hiddenSelect ? el.hiddenSelect.value : 'normal';
+    const model = el.ratingModelSelect ? el.ratingModelSelect.value : 'blend';
     return {
       factorPotential: el.potentialToggle ? el.potentialToggle.checked : false,
       hidden: HIDDEN_STRENGTH[key] !== undefined ? HIDDEN_STRENGTH[key] : HIDDEN_STRENGTH.normal,
+      engineShare: RATING_MODELS[model] !== undefined ? RATING_MODELS[model] : RATING_MODELS.blend,
       ipWeight: 0.5,
     };
+  }
+
+  /** Match-engine fit (0-100) with the attributes behind it in the tooltip; '—' where it can't be worked out. */
+  function impactHtml(player) {
+    const f = engineFit20(player);
+    if (f === null) return '<span style="color:var(--muted-2)">—</span>';
+    const top = engineDrivers(player).slice(0, 6).map(d => `${d.name} ${Math.round(d.value)}`).join(' · ');
+    const tip = `Match-engine fit: his attributes weighted by what they were worth in FM27 matches (Fm-Match-Lab). ${top}`;
+    return `<span class="score-pill impact-pill" title="${esc(tip)}">${(f * 5).toFixed(1)}</span>`;
   }
 
   function posLabelOf(code) {
@@ -162,20 +174,22 @@
     return `<span class="fam-tag ${cls}"${tip}>${fam.label || fam.tier}</span>`;
   }
 
-  /** How much his hidden profile moves a rating, with the estimates behind it in the tooltip. */
+  /** How much his availability moves a rating, with what it is made of in the tooltip. */
   function hiddenTagHtml(r) {
     if (!r || r.hiddenMultiplier === undefined || !r.player) return '';
     const p = hiddenProfile(r.player);
     const pct = (r.hiddenMultiplier - 1) * 100;
     const f = (x) => (x === null ? '—' : (x * 20).toFixed(0));
-    const tip = `Understanding ${f(p.understanding)} · Buy-in ${f(p.buyIn)} · Reliability ${f(p.reliability)} · Availability ${f(p.availability)} · Discipline ${f(p.discipline)} (estimates, out of 20)`;
+    const ta = p.tacticalAbility === null ? '—' : p.tacticalAbility;
+    const tip = `Availability ${f(p.availability)}/20 (injury proneness, natural fitness) · Tactical ability ${ta}/100 (the game's formula; shown only)`;
     const cls = pct > 0.4 ? 'hid-up' : (pct < -0.4 ? 'hid-down' : 'hid-flat');
     return `<span class="hidden-tag ${cls}" title="${tip}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
   }
 
   function ipOopCell(r) {
     const f = (x) => (x === null || x === undefined ? '—' : x.toFixed(0));
-    return `<span title="Fit for the in-possession / out-of-possession role (0-100)">${f(r.ipFit)} / ${f(r.oopFit)}</span>`;
+    const eng = r.engineFit === null || r.engineFit === undefined ? '' : `; match-engine fit ${f(r.engineFit)}`;
+    return `<span title="Role fit in possession / out of possession (0-100)${eng}">${f(r.ipFit)} / ${f(r.oopFit)}</span>`;
   }
 
   // Shown beside a name while injured players are still listed (the "Hide injured players" box is off).
@@ -525,7 +539,7 @@
       // typing in a filter box or re-sorting just re-filters the cached rows.
       const scoutCacheKey = JSON.stringify([
         activeSlots.map(s => [s.positionCode, s.ipRoleId, s.oopRoleId]), hideForeign,
-        options.factorPotential, options.hidden, options.ipWeight, scoutVersion,
+        options.factorPotential, options.hidden, options.engineShare, options.ipWeight, scoutVersion,
       ]);
       const needsRanking = !scoutCache || scoutCache.key !== scoutCacheKey;
       if (needsRanking && currentTab !== 'scouting') {
@@ -710,7 +724,7 @@
           <th>Rating</th>
           <th>IP / OOP fit</th>
           <th>Familiarity</th>
-          <th>Hidden</th>
+          <th title="How much his availability (injury proneness, natural fitness) moves his rating">Avail.</th>
           <th>Potential</th>
         </tr>
       </thead>
@@ -753,7 +767,7 @@
               <th>Score</th>
               <th>IP / OOP fit</th>
               <th>Familiarity</th>
-              <th>Hidden</th>
+              <th title="How much his availability (injury proneness, natural fitness) moves his rating">Avail.</th>
               <th>Potential</th>
             </tr>
           </thead>
@@ -850,9 +864,11 @@
 
   function sortScoutRows(rows, positionCode) {
     const state = scoutSortState[positionCode] || { field: 'score', dir: 'desc' };
+    const val = (r) => (state.field === 'potential' ? r.potentialScore
+      : (state.field === 'impact' ? engineFit20(r.player) : r.score));
     return [...rows].sort((a, b) => {
-      const av = (state.field === 'potential' ? a.potentialScore : a.score);
-      const bv = (state.field === 'potential' ? b.potentialScore : b.score);
+      const av = val(a);
+      const bv = val(b);
       const aVal = av === null || av === undefined ? -Infinity : av;
       const bVal = bv === null || bv === undefined ? -Infinity : bv;
       return state.dir === 'asc' ? aVal - bVal : bVal - aVal;
@@ -888,12 +904,13 @@
         <td>${r.player.info.Age || '—'}</td>
         <td><span class="score-pill">${r.score.toFixed(1)}</span></td>
         <td>${r.potentialScore !== null ? `<span class="score-pill potential-score">${r.potentialScore.toFixed(1)}</span>` : '<span style="color:var(--muted-2)">—</span>'}</td>
+        <td>${impactHtml(r.player)}</td>
         <td>${famTagHtml(r.familiarity)}</td>
         <td>${hiddenTagHtml(r)}</td>
         ${clubCell(r.player)}
       </tr>
     `).join('');
-    const colCount = hasClub ? 10 : 7;
+    const colCount = hasClub ? 11 : 8;
     const countLabel = rows.length > shown.length
       ? `showing top ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}`
       : `${rows.length.toLocaleString()} match${rows.length === 1 ? '' : 'es'}`;
@@ -920,8 +937,9 @@
               <th>Age</th>
               <th class="sortable-th" data-sort-field="score">Score${sortArrow('score')}</th>
               <th class="sortable-th" data-sort-field="potential">Potential${sortArrow('potential')}</th>
+              <th class="sortable-th" data-sort-field="impact" title="Match-engine fit (0-100): his attributes weighted by what they were worth in FM27's match engine (Fm-Match-Lab studies). The engine plays on attributes, not on CA - a high Impact with a modest CA or value is a bargain.">Impact${sortArrow('impact')}</th>
               <th>Familiarity</th>
-              <th>Hidden</th>
+              <th title="How much his availability (injury proneness, natural fitness) moves his rating">Avail.</th>
               ${hasClub ? '<th>Club · Nation</th><th>Value</th><th title="Estimated interest in joining your club on a transfer (T) and on a loan (L)">Interest</th>' : ''}
             </tr>
           </thead>
@@ -1073,6 +1091,7 @@
     `;
     el.playerOverviewPanels.appendChild(summaryPanel);
     el.playerOverviewPanels.appendChild(buildAttributesPanel(p));
+    el.playerOverviewPanels.appendChild(buildEnginePanel(p));
     el.playerOverviewPanels.appendChild(buildHiddenPanel(p));
     el.playerOverviewPanels.appendChild(buildPositionOverviewPanel(p));
   }
@@ -1204,21 +1223,40 @@
     const hid = ['Consistency', 'Important Matches', 'Injury Proneness', 'Versatility', 'Natural Fitness', 'Dirtiness', 'Determination']
       .map(n => item(n, at(n))).join('');
     const est = (label, x, tip) => `<div class="attr-item" title="${tip}"><span class="attr-name">${label}</span><span class="attr-val">${x === null ? '—' : (x * 20).toFixed(1)}</span></div>`;
+    const ta = p.tacticalAbility;
     const strength = rankOptions().hidden;
     const mult = hiddenMultiplier(player, strength);
     panel.innerHTML = `
-      <div class="panel-head"><h2>Hidden profile</h2><span class="hint" style="margin:0">Effect on his ratings: <strong>${mult >= 1 ? '+' : ''}${((mult - 1) * 100).toFixed(1)}%</strong> at the current "Hidden factors" setting</span></div>
+      <div class="panel-head"><h2>Hidden profile</h2><span class="hint" style="margin:0">Effect on his ratings: <strong>${mult >= 1 ? '+' : ''}${((mult - 1) * 100).toFixed(1)}%</strong> at the current "Availability" setting</span></div>
       <div class="attr-category"><h3>Personality</h3><div class="attr-grid">${pers}</div></div>
       <div class="attr-category"><h3>Hidden attributes</h3><div class="attr-grid">${hid}</div></div>
-      <div class="attr-category"><h3>Estimated from those (out of 20)</h3><div class="attr-grid">
-        ${est('Tactical understanding', p.understanding, 'How quickly he picks up your concepts: adaptability, decisions, teamwork, anticipation, concentration')}
-        ${est('Player buy-in', p.buyIn, 'Whether he believes in the plan: professionalism, adaptability, loyalty, temperament, determination')}
-        ${est('Reliability', p.reliability, 'Match-to-match consistency: consistency, important matches, pressure')}
-        ${est('Availability', p.availability, 'Injury proneness and natural fitness')}
-        ${est('Discipline', p.discipline, 'Temperament, sportsmanship, dirtiness, controversy')}
+      <div class="attr-category"><h3>What the game makes of them</h3><div class="attr-grid">
+        <div class="attr-item" title="The game's own Player Tactical Ability: the median of Anticipation, Decisions, Composure, Concentration and Versatility, minus 1, times 100/19 (decoded by Fm-Match-Lab, exact). It feeds his tactical familiarity, but only through the median: raising one of the five helps only if it moves the median."><span class="attr-name">Tactical ability (0-100)</span><span class="attr-val">${ta === null ? '—' : ta}</span></div>
+        ${est('Availability (out of 20)', p.availability, 'Injury proneness and natural fitness: how often he is fit and sharp. The only hidden factor that moves his rating.')}
+        ${est('Player buy-in (estimate, out of 20)', p.buyIn, 'Professionalism, adaptability, loyalty, temperament, determination. The game shows buy-in on its Tactical Effectiveness screen, but the match showed no effect from it.')}
       </div></div>
-      <p class="hint" style="margin-top:8px">FM27 builds a player's effectiveness from his ability in the role, his tactical understanding, his buy-in and more. The game keeps understanding and buy-in out of reach of a memory read, so these are estimates from the attributes and personality that drive them.</p>
+      <p class="hint" style="margin-top:8px">Fm-Match-Lab replayed real FM27 matches thousands of times: consistency, important matches, determination, buy-in, current ability and most personality fields made no measurable difference in a match, and Natural Fitness isn't read during one (it governs recovery between matches). So only availability moves his rating; the rest is here for information.</p>
     `;
+    return panel;
+  }
+
+  /** What the match engine rewards in him: his match-engine fit and the attributes behind it (Fm-Match-Lab). */
+  function buildEnginePanel(player) {
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    const f = engineFit20(player);
+    const rows = engineDrivers(player).map(d => {
+      const per5 = ENGINE_PPG[d.name] !== undefined ? ENGINE_PPG[d.name] * 5 / 11 * 38 : null;
+      return `<tr><td>${esc(d.name)}</td><td><strong>${d.value.toFixed(1)}</strong></td><td>${(d.weight * 100).toFixed(1)}</td>
+        <td>${per5 === null ? '—' : `${per5 >= 0 ? '+' : ''}${per5.toFixed(1)}`}</td></tr>`;
+    }).join('');
+    panel.innerHTML = `
+      <div class="panel-head"><h2>Match engine</h2><span class="hint" style="margin:0">Match-engine fit: <strong>${f === null ? '—' : (f * 5).toFixed(1)}</strong> / 100</span></div>
+      <p class="hint">The attributes that moved results in FM27's own match engine (Fm-Match-Lab: ten real matches replayed 300 times per attribute). "Weight" is the xG difference per game for a whole team per point (×100); "+5 for him" is roughly what five more points on this one player would be worth over a 38-game season, in league points. Everything not listed - Passing, Technique, First Touch, Crossing, Tackling, Marking, Positioning, Decisions, Teamwork, Flair... - showed no clear effect.</p>
+      <div class="table-wrap"><table class="results-table">
+        <thead><tr><th>Attribute</th><th>His value</th><th>Weight</th><th title="League points over a 38-game season from +5 on this attribute for this one starter (the whole-team effect / 11)">+5 for him</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
     return panel;
   }
 
@@ -1337,9 +1375,9 @@
     const options = rankOptions();
     const players = squad.players;
     const slots = Object.values(grid);
-    let xi, bench;
+    let xi, bench, ev = null;
     if (slots.length >= 8) {
-      const ev = evaluateFormation(slots, players, options);
+      ev = evaluateFormation(slots, players, options);
       xi = ev.assignment.filter(Boolean).map(r => r.player);
       bench = computeBench(ev.rankedSlots, ev.assignment, 9).map(b => b.player);
     } else {
@@ -1347,7 +1385,7 @@
       xi = byCa.slice(0, 11);
       bench = byCa.slice(11, 20);
     }
-    return { players, options, xi, bench, xiIds: new Set(xi.map(playerId)), benchIds: new Set(bench.map(playerId)) };
+    return { players, options, ev, slots, xi, bench, xiIds: new Set(xi.map(playerId)), benchIds: new Set(bench.map(playerId)) };
   }
 
   // --- Tactic Advisor: which formation suits this squad best? ---
@@ -1381,6 +1419,15 @@
     }).sort((a, b) => b.score - a.score);
 
     const best = advisorResults.length ? advisorResults[0].score : 0;
+    const mine = advisorResults.find(r => r.c.source === 'current');
+    // One point of XI rating (0-100) is 0.2 attribute points for each of the eleven, about 0.07 points a game by the
+    // studies' values - a rough guide, closest to the truth with "Ratings: Match engine".
+    const ppgPerRating = 0.2 * STARTER_PPG_PER_POINT * 11;
+    const vsMine = (r) => {
+      if (!mine || r === mine) return '';
+      const d = (r.score - mine.score) * ppgPerRating;
+      return `<br><span class="muted-inline" title="Rough estimate from the XI rating once the new tactic is fully trained; until then an untrained tactic costs about 0.4 points a game">${d >= 0 ? '+' : ''}${d.toFixed(2)} pts/game vs yours</span>`;
+    };
     const sourceLabel = { current: 'on your pitch', saved: 'saved formation', preset: 'preset, best roles for your squad' };
     const rows = advisorResults.map((r, i) => {
       const xi = inPitchOrder(r.ev.assignment.map((a, idx) => ({ a, slot: r.c.slots[idx] })), x => x.slot.positionCode)
@@ -1389,7 +1436,7 @@
       return `<tr>
         <td>#${i + 1}</td>
         <td><strong>${esc(r.c.name)}</strong><br><span class="muted-inline">${sourceLabel[r.c.source]}</span></td>
-        <td><span class="score-pill">${r.score.toFixed(1)}</span> <span class="muted-inline">${r.score >= best ? 'best' : `${(r.score - best).toFixed(1)}`}</span></td>
+        <td><span class="score-pill">${r.score.toFixed(1)}</span> <span class="muted-inline">${r.score >= best ? 'best' : `${(r.score - best).toFixed(1)}`}</span>${vsMine(r)}</td>
         <td>${weak}</td>
         <td><details><summary>XI</summary><div class="xi-list">${xi}</div></details></td>
         <td><button type="button" class="btn btn-sm" data-use="${i}">Use on pitch</button></td>
@@ -1399,7 +1446,8 @@
     box.innerHTML = `
       <div class="panel">
         <div class="panel-head"><h2>Tactic Advisor</h2></div>
-        <p class="hint">Every formation scored by the best XI your squad can field in it (average rating of the eleven, with hidden factors and position familiarity counted). Presets use the in- and out-of-possession roles that suit your squad best; your pitch tactic and saved formations keep the roles you chose. Injured players are ${hideInjured ? 'left out' : 'included (tick "Hide injured players" to leave them out)'}.</p>
+        <p class="hint">Every formation scored by the best XI your squad can field in it (average rating of the eleven, with availability and position familiarity counted). Presets use the in- and out-of-possession roles that suit your squad best; your pitch tactic and saved formations keep the roles you chose. Injured players are ${hideInjured ? 'left out' : 'included (tick "Hide injured players" to leave them out)'}.</p>
+        <p class="hint"><strong>Before switching</strong> (Fm-Match-Lab, FM27's own engine): a tactic your players haven't trained costs about 0.4 points a game, and low against high familiarity was worth about 0.5 - as much as +7 Pace for the whole squad. Training it to about 75 in every area recovers that; more gains nothing, and training counts twice as much as playing matches with it. So a small gain on paper isn't worth a switch mid-season. In the same studies every installed FM preset style did worse than a tactic suited to the squad, and the defensive ones (Park the Bus, Catenaccio) were by far the worst.</p>
         <div class="table-wrap"><table class="results-table">
           <thead><tr><th></th><th>Formation</th><th>XI rating</th><th>Weakest link</th><th>Lineup</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
@@ -1419,6 +1467,83 @@
         computeAndRender();
       });
     });
+  }
+
+  // --- Team Info: what the match engine says about this squad (Fm-Match-Lab) ---
+
+  const SEASON_GAMES = 38;
+  const ENGINE_TOP = ['Pace', 'Acceleration', 'Jumping Reach', 'Stamina', 'Anticipation', 'Dribbling', 'Concentration'];
+
+  function engineInsightsHtml(ctx) {
+    const pts = (ppg) => (ppg * SEASON_GAMES).toFixed(1);
+    const attrOf = (p, n) => { const x = vecOf(p)[ATTR_INDEX[attrKey(n)]]; return x === x ? x : null; };
+
+    // 1. starters out of position
+    let posBlock;
+    if (!ctx.ev) {
+      posBlock = '<p class="hint">Set up your tactic on the pitch (8+ positions) to check your XI.</p>';
+    } else {
+      const rows = [];
+      ctx.ev.assignment.forEach((r, i) => {
+        if (!r || !r.familiarity || r.familiarity.cost20 === undefined || r.familiarity.rating >= 20) return;
+        const ppg = r.familiarity.cost20 * STARTER_PPG_PER_POINT;
+        rows.push({ r, slot: ctx.slots[i], ppg });
+      });
+      rows.sort((a, b) => b.ppg - a.ppg);
+      const total = rows.reduce((s, x) => s + x.ppg, 0);
+      posBlock = `<p class="hint">Starters below Natural in their slot. In the studies, capping a team's starters at 15 cost 0.26 points a game and at 10 cost 0.85; this is that cost per player (a rough guide).</p>
+        ${miniTable(['Slot', 'Player', 'Rating', 'Cost / season'], rows.map(x => `<tr><td>${posLabelOf(x.slot.positionCode)}</td><td>${nameCell(x.r.player)}</td><td>${famTagHtml(x.r.familiarity)} ${x.r.familiarity.rating}/20</td><td>${x.ppg < 0.0005 ? 'tiny' : `≈ ${pts(x.ppg)} pts`}</td></tr>`), 'Everyone in your XI plays a natural position')}
+        ${rows.length ? `<p class="hint" style="margin-top:6px">All together: ≈ ${pts(total)} league points over a season.</p>` : ''}`;
+    }
+
+    // 2. the XI on the attributes the engine rewards most
+    const xi = ctx.xi;
+    const attrRows = ENGINE_TOP.map(n => {
+      const vals = xi.map(p => ({ p, v: attrOf(p, n) })).filter(x => x.v !== null);
+      if (!vals.length) return '';
+      const avg = vals.reduce((s, x) => s + x.v, 0) / vals.length;
+      const low = vals.reduce((a, b) => (b.v < a.v ? b : a));
+      const perPt = ENGINE_PPG[n] || 0;
+      return `<tr><td>${n}</td><td><strong>${avg.toFixed(1)}</strong></td><td>${esc(low.p.info.Player)} <span class="muted-inline">${low.v.toFixed(0)}</span></td>
+        <td>${pts(perPt * 5)}</td></tr>`;
+    }).join('');
+    const xiImpact = xi.map(engineFit20).filter(x => x !== null);
+    const impactAvg = xiImpact.length ? xiImpact.reduce((a, b) => a + b, 0) / xiImpact.length * 5 : null;
+
+    // 3. the goalkeeper's kicking
+    let gkNote = '';
+    const gkSlot = ctx.ev ? ctx.ev.assignment.find((r, i) => r && ctx.slots[i].positionCode === 'GK') : null;
+    const gk = gkSlot ? gkSlot.player : null;
+    const kick = gk ? attrOf(gk, 'Kicking') : null;
+    if (kick !== null && kick >= 15) {
+      gkNote = `<p class="hint" style="margin-top:6px"><strong>${esc(gk.info.Player)}</strong> has Kicking ${kick.toFixed(0)}. Goalkeeper Kicking was the one attribute with a clearly negative effect (−0.12 xG difference per +5, with real squads only): long kicks may skip the build-up a tactic relies on. If you play out from the back, short distribution is worth a try.</p>`;
+    }
+
+    const lever = (what, size) => `<tr><td>${what}</td><td>${size}</td></tr>`;
+    return `
+      <div class="panel">
+        <div class="panel-head"><h2>What the match engine rewards</h2><span class="hint" style="margin:0">from <a href="https://github.com/caiograco289/Fm-Match-Lab" target="_blank" rel="noopener">Fm-Match-Lab</a>: real FM27 matches replayed on the game's own engine, ~190,000 times</span></div>
+        <div class="info-grid">
+          <div><h3>Out of position in your XI</h3>${posBlock}</div>
+          <div><h3>Your XI on the top attributes</h3>
+            <p class="hint">Average of your XI${impactAvg !== null ? ` (match-engine fit ${impactAvg.toFixed(1)})` : ''}, its weakest starter, and what +5 on that attribute for the whole XI was worth over a season.</p>
+            ${miniTable(['Attribute', 'XI avg', 'Weakest', '+5 for XI (pts/season)'], attrRows ? [attrRows] : [], 'No attribute data')}
+            ${gkNote}
+          </div>
+        </div>
+        <h3 style="margin-top:12px">The biggest levers, measured</h3>
+        ${miniTable(['What', 'Effect in the studies'], [
+          lever('Match sharpness / condition', 'sharpness 50%: −1.0 pts a game; 75%: −0.37. Condition 80%: −0.8; 90%: −0.28. Rotate and keep players sharp - it outweighs any tactical tweak'),
+          lever('Playing people in their positions', 'starters capped at 15: −0.26 pts a game; at 10: −0.85'),
+          lever('Tactical familiarity', 'untrained: about −0.4 pts a game; trained to about 75 in each area: +0.2, and no more after that. Training counts twice as much as match exposure'),
+          lever('In-match management', 'letting the AI run the match instead of the assistant: −0.56 pts a game'),
+          lever('Team cohesion', 'lowest to highest: +0.32 pts a game'),
+          lever('Mentality', 'one step more attacking: −0.26 xG difference, no gain in points'),
+          lever('Tactic', 'every installed preset did worse than a tactic suited to the squad; Park the Bus (−0.94 pts a game) and Catenaccio (−0.60) were the worst'),
+          lever('No measurable effect', 'current ability, reputation, height, weight, buy-in, morale (small), most personality fields, most single team instructions'),
+        ])}
+        <p class="hint" style="margin-top:6px">All from one club's matches (a promoted Premier League side against mostly stronger teams); a dominant team may see different sizes. Season figures are rough: per-game effects × ${SEASON_GAMES}.</p>
+      </div>`;
   }
 
   // --- Team Info: the squad at a glance ---
@@ -1469,6 +1594,7 @@
           ${card('Wage bill', wages ? money(wages) + '/wk' : '—', 'whole squad')}
         </div>
       </div>
+      ${engineInsightsHtml(ctx)}
       <div class="info-grid">
         <div class="panel"><div class="panel-head"><h2>The stars</h2></div>
           ${miniTable(['Player', 'Age', 'Position', 'CA', 'PA'], stars.map(p => `<tr><td>${nameCell(p)}</td><td>${p.info.Age || '—'}</td><td>${esc(p.info.Position)}</td><td>${p.ca || '—'}</td><td>${p.pa || '—'}</td></tr>`))}
@@ -1626,6 +1752,7 @@
         <td>${p.ca || '—'}</td>
         <td><strong>${p.pa || '—'}</strong></td>
         <td>${ov && ov.score !== null ? `${ov.role.ip.name} <span class="muted-inline">/ ${ov.role.oop.name}</span> <span class="score-pill">${ov.score.toFixed(1)}</span>` : '—'}</td>
+        <td>${impactHtml(p)}</td>
         <td>${esc(p.raw['Transfer Value'] || '—')}</td>
       </tr>`;
     }).join('');
@@ -1649,8 +1776,8 @@
           <span class="hint" style="margin:0">${esc(worldState.status)}</span>
         </div>
         <div class="table-wrap scroll-table-wrap"><table class="results-table">
-          <thead><tr><th>#</th><th>Player</th><th>Age</th><th>Club</th><th>Nation</th><th>Position</th><th>CA</th><th>PA</th><th>Best roles</th><th>Value</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="10" style="color:var(--muted)">Press Load.</td></tr>'}</tbody>
+          <thead><tr><th>#</th><th>Player</th><th>Age</th><th>Club</th><th>Nation</th><th>Position</th><th>CA</th><th>PA</th><th>Best roles</th><th title="Match-engine fit (0-100): attributes weighted by what they were worth in FM27 matches (Fm-Match-Lab)">Impact</th><th>Value</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="11" style="color:var(--muted)">Press Load.</td></tr>'}</tbody>
         </table></div>
       </div>`;
 
@@ -1726,6 +1853,13 @@
       try { const saved = localStorage.getItem('fm27plus.hidden'); if (saved && HIDDEN_STRENGTH[saved] !== undefined) el.hiddenSelect.value = saved; } catch (e) { /* storage unavailable */ }
       el.hiddenSelect.addEventListener('change', () => {
         try { localStorage.setItem('fm27plus.hidden', el.hiddenSelect.value); } catch (e) { /* storage unavailable */ }
+        computeAndRender();
+      });
+    }
+    if (el.ratingModelSelect) {
+      try { const saved = localStorage.getItem('fm27plus.model'); if (saved && RATING_MODELS[saved] !== undefined) el.ratingModelSelect.value = saved; } catch (e) { /* storage unavailable */ }
+      el.ratingModelSelect.addEventListener('change', () => {
+        try { localStorage.setItem('fm27plus.model', el.ratingModelSelect.value); } catch (e) { /* storage unavailable */ }
         computeAndRender();
       });
     }
