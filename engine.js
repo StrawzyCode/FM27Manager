@@ -314,7 +314,12 @@ const ENGINE_PPG = {
   'Work Rate': 0.025, 'Vision': 0.016,
 };
 const STARTER_PPG_PER_POINT = Object.values(ENGINE_PPG).reduce((a, b) => a + b, 0) / 11;
-const ENGINE_IDX = Object.keys(ENGINE_WEIGHTS).map(n => [ATTR_INDEX[attrKey(n)], ENGINE_WEIGHTS[n], n]);
+// Attributes that stop paying above a value. Work Rate counted with real squads (Study 1, many players below 12) but
+// showed nothing when every player was levelled to 12 and moved +/-5 (Study 2, arm B), and harvestgreen22's in-game
+// season tests found it useless above 12 - two independent signs that it saturates there.
+const ENGINE_CAPS = { 'Work Rate': 12 };
+const ENGINE_IDX = Object.keys(ENGINE_WEIGHTS).map(n => [ATTR_INDEX[attrKey(n)], ENGINE_WEIGHTS[n], n,
+  ENGINE_CAPS[n] !== undefined ? ENGINE_CAPS[n] : 20]);
 
 /** How much of the rating comes from the match-engine fit: 0 = role fit only (the game's star ratings), 1 = engine
  * fit only. Goalkeepers always use the role fit: the studies changed whole squads, so they say little about keepers. */
@@ -327,26 +332,57 @@ function engineFit20(player) {
   const v = vecOf(player);
   let s = 0, w = 0, total = 0;
   for (let i = 0; i < ENGINE_IDX.length; i++) {
-    const [idx, wt] = ENGINE_IDX[i];
+    const [idx, wt, , cap] = ENGINE_IDX[i];
     total += wt;
     const x = v[idx];
-    if (x === x) { s += x * wt; w += wt; }
+    if (x === x) { s += Math.min(x, cap) * wt; w += wt; }
   }
   player._ef = w >= total / 2 ? s / w : null;
   return player._ef;
 }
 
-/** The attributes behind a player's engine fit, biggest share first: [{name, value, weight, share}]. */
+/** The attributes behind a player's engine fit, biggest share first: [{name, value, weight, share, cap}]. */
 function engineDrivers(player) {
   const v = vecOf(player);
   const out = [];
-  ENGINE_IDX.forEach(([idx, wt, name]) => {
+  ENGINE_IDX.forEach(([idx, wt, name, cap]) => {
     const x = v[idx];
-    if (x === x) out.push({ name, value: x, weight: wt });
+    if (x === x) out.push({ name, value: x, weight: wt, cap: cap < 20 ? cap : null });
   });
-  const tot = out.reduce((s, d) => s + d.weight * d.value, 0) || 1;
-  out.forEach(d => { d.share = d.weight * d.value / tot; });
+  const tot = out.reduce((s, d) => s + d.weight * Math.min(d.value, d.cap || 20), 0) || 1;
+  out.forEach(d => { d.share = d.weight * Math.min(d.value, d.cap || 20) / tot; });
   return out.sort((a, b) => b.weight - a.weight);
+}
+
+/** A goalkeeper (Accomplished or better in goal): the match-engine fit isn't meant for him. */
+function isKeeper(player) {
+  return !!(player.ratings && player.ratings[RATING_INDEX.GK] >= 15);
+}
+
+/** How match-engine fit usually goes with current ability among these players: a straight line fitted over the
+ * outfield players with a CA ({a, b, n}), or null with too few. The engine plays on attributes and never reads CA,
+ * while CA drives transfer values and wages - so a player whose engine fit is well above the line for his CA is
+ * worth more in a match than he costs (impactVsCa). */
+function impactCaModel(players) {
+  let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  players.forEach(p => {
+    const ca = p.ca;
+    if (!ca || isKeeper(p)) return;
+    const y = engineFit20(p);
+    if (y === null) return;
+    n++; sx += ca; sy += y; sxx += ca * ca; sxy += ca * y;
+  });
+  const den = n * sxx - sx * sx;
+  if (n < 30 || !den) return null;
+  const b = (n * sxy - sx * sy) / den;
+  return { a: (sy - b * sx) / n, b, n };
+}
+
+/** Match-engine fit above (+) or below (-) what his CA predicts, on the 0-100 scale; null for keepers / unknowns. */
+function impactVsCa(player, model) {
+  if (!model || !player.ca || isKeeper(player)) return null;
+  const y = engineFit20(player);
+  return y === null ? null : (y - (model.a + model.b * player.ca)) * 5;
 }
 
 // --- Position Familiarity & Penalty System ---
@@ -582,16 +618,17 @@ function potentialMultiplierFor(potential) {
 //
 // Fm-Match-Lab's Study 5 (https://github.com/caiograco289/Fm-Match-Lab, FM27 27.0.1) started one team at a set
 // condition or match sharpness and replayed ten real matches 30 times each. Against the saved matches' own state
-// (condition 94-99%, sharpness mostly 90-100%) the team's points per game moved by: sharpness 50% -1.03, 75% -0.37,
-// 100% +0.16; condition 80% -0.80, 90% -0.28, 100% +0.18 - bigger than any attribute or tactical setting. Measured
-// from 100% and shared out over the eleven starters, that is what one player's state costs his team (taken as adding
-// up player by player; the study only moved whole teams). STARTER_PPG_PER_POINT (Study 1: one in-game point on every
-// attribute the engine rewards, ~0.033 points per game for one starter) turns the cost into attribute points, taken
-// off like the position cost: as if each attribute were that much lower (75% sharpness ~1.5, 80% condition ~2.7).
-// Below the lowest measured value (50% sharpness, 80% condition) the last slope just continues.
+// (condition 94-99%, sharpness mostly 90-100%) the team's points per game moved by: sharpness 50% -1.03, 75% -0.37;
+// condition 80% -0.80, 90% -0.28 - bigger than any attribute or tactical setting. Full fitness was rerun on 900 more
+// pairs (Study 5 confirmation): condition 100% +0.13 (confirmed), sharpness 100% +0.10 (likely; the first screen said
+// +0.18 and +0.16). Measured from 100% and shared out over the eleven starters, that is what one player's state costs
+// his team (taken as adding up player by player; the study only moved whole teams). STARTER_PPG_PER_POINT (Study 1:
+// one in-game point on every attribute the engine rewards, ~0.032 points per game for one starter) turns the cost into
+// attribute points, taken off like the position cost: as if each attribute were that much lower (75% sharpness ~1.3,
+// 80% condition ~2.6). Below the lowest measured value (50% sharpness, 80% condition) the last slope just continues.
 const FITNESS_PPG = {
-  sharpness: [[50, -(1.03 + 0.16) / 11], [75, -(0.37 + 0.16) / 11], [100, 0]],
-  condition: [[80, -(0.80 + 0.18) / 11], [90, -(0.28 + 0.18) / 11], [100, 0]],
+  sharpness: [[50, -(1.03 + 0.10) / 11], [75, -(0.37 + 0.10) / 11], [100, 0]],
+  condition: [[80, -(0.80 + 0.13) / 11], [90, -(0.28 + 0.13) / 11], [100, 0]],
 };
 
 /** Points per game (<= 0) one starter costs his team at this percentage, from a FITNESS_PPG curve. */
