@@ -22,7 +22,10 @@ OFF_FLAGS = 0x0A6                         # u16 bit flags (0x10 = was at the hum
 OFF_DATE_STAMP = 0x0B8                    # u16 day-of-year, u16 year (game date for actively simulated players)
 OFF_HEIGHT = 0x0E6                        # u8 cm
 OFF_VALUE = 0x0EC                         # u32 transfer value, base currency
-OFF_REP = 0x116                           # 3 x u16: home, current, world reputation (0..10000)
+OFF_SHARPNESS = 0x110                     # u16 match sharpness today, 0..10000 (= 0-100%), see below
+OFF_CONDITION = 0x114                     # u16 condition (physical fitness) today, 0..10000
+FITNESS_MAX = 10000
+OFF_REP = 0x116                         # 3 x u16: home, current, world reputation (0..10000)
 OFF_CA = 0x11C                            # u16 current ability 0..200
 OFF_PA = 0x11E                            # u16 potential ability 0..200
 OFF_PERSON_VTABLE = 0x140
@@ -60,6 +63,20 @@ CLUB_NAME_FULL = 0xC0
 CLUB_NAME_SHORT = 0xC8
 NATION_ID = 0x08
 NATION_NAME = 0x20                        # short common name ("Ivory Coast"); +0x18 is the official one
+
+# Condition and match sharpness (OFF_CONDITION, OFF_SHARPNESS) move every day: training and rest change them, a match
+# drains condition and builds sharpness. 0..10000 is the scale Fm-Match-Lab writes into FM27's match engine
+# (condition=8000 is 80%). FM27 itself never shows either as a number - only the heart / sharpness icons in the squad
+# views and the heart's band in its tooltip - so they were matched against those, for all 75 squad players of the KäPa
+# save on 11/04/2027 (a match day; the U18s had played the day before):
+#   condition (the heart's tooltip): Ben Arfi 7379 "Fair"; Mäntylä 7844, Larsson 7901, Mattsson 7988, Åhman 8059,
+#     Ferrer 8308 ("Good, Tired"), Pöyry 8427, A. Lähteenmäki 8537 "Good"; Kuusinen 8718 "Excellent", and everyone at
+#     8729 or more shows the full green heart.
+#   sharpness (the icon): Collin 4054 an orange arrow down; 31 players at 5300-5950 the yellow dash ("Lacking
+#     Sharpness"); Puro 6334, Kolehmainen 6386, Salmi 6712, Taipale 7206 one arrow up; P. Lähteenmäki 7465, Ahola 7635,
+#     Pakarinen 8300 two arrows up; 8525 and above the green tick (the starters who had played a week before: 10000).
+# Across the database both stay within 0..10000. The i16 at +0x112, between the two, rises for players who are gaining
+# sharpness and falls for the rest; it isn't used.
 
 # Sticky "has been at the human club" bit. It is never cleared when a player leaves (or when a
 # youth-intake prospect is turned down), so it is only used to work out *which* club is the human's.

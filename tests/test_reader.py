@@ -1,5 +1,6 @@
 """Runs the real fm26mem reader against the synthetic process.  python tests/test_reader.py"""
 import os
+import struct
 import sys
 import time
 
@@ -102,6 +103,26 @@ not_q = idx_q(home_grown=('nation15', 'Finland', True))
 check(len(in_q) + len(not_q) == len(everyone), '"is" and "is not" split the pool')
 check(len(idx_q(home_grown=('nation0', 'Finland', False))) >= len(in_q), '0-21 pool includes the 15-21 pool')
 print('trained in Finland (15-21): %d players; pool split %d / %d' % (n_fin, len(in_q), len(not_q)))
+
+# --- condition and match sharpness (record + 0x114 / + 0x110, 0..10000 -> %)
+sq = snap.squad_indices()
+by_idx = {p['idx']: p for p in world.players}
+rows = {int(i): snap.player(int(i), with_attrs=False) for i in sq}
+check(all(r['condition'] == round(by_idx[i]['condition'] / 100, 1) and r['sharpness'] == round(by_idx[i]['sharpness'] / 100, 1)
+          for i, r in rows.items()), 'every squad row carries his condition and match sharpness in %% (%d rows)' % len(rows))
+check(any(r['condition'] < 100 for r in rows.values()) and any(r['sharpness'] == 100 for r in rows.values()),
+      'a mix of tired, rusty and fully fit players')
+# a day later the game has moved them on, and the squad list re-reads them without a rescan
+fa, fb = world.kapa_squad[0], world.kapa_squad[1]
+world.mem.write(fa['rec'] + 0x110, struct.pack('<H', 5000))
+world.mem.write(fa['rec'] + 0x114, struct.pack('<H', 8000))
+world.mem.write(fb['rec'] + 0x110, struct.pack('<H', 6000))
+world.mem.write(fb['rec'] + 0x14C, struct.pack('<I', 0xFFFFFFFE))      # ... but fb's record no longer holds him
+refreshed = snap.refresh_fitness(sq)
+ra, rb = snap.player(fa['idx'], with_attrs=False), snap.player(fb['idx'], with_attrs=False)
+check(ra['sharpness'] == 50.0 and ra['condition'] == 80.0, "refresh_fitness picks up the new day's values")
+check(rb['sharpness'] == round(fb['sharpness'] / 100, 1), '... but not from a record that now holds someone else')
+check(refreshed == len(sq) - 1, 'refreshed %d of %d squad players' % (refreshed, len(sq)))
 
 print('\n%d failure(s)' % len(fails))
 sys.exit(1 if fails else 0)

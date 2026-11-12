@@ -492,6 +492,41 @@ function potentialMultiplierFor(potential) {
   return clamp(1 + (potential - 2.5) * 0.032, 0.92, 1.08);
 }
 
+// --- Today's fitness: condition and match sharpness ---
+//
+// Fm-Match-Lab's Study 5 (https://github.com/caiograco289/Fm-Match-Lab, FM27 27.0.1) started one team at a set
+// condition or match sharpness and replayed ten real matches 30 times each. Against the saved matches' own state
+// (condition 94-99%, sharpness mostly 90-100%) the team's points per game moved by: sharpness 50% -1.03, 75% -0.37,
+// 100% +0.16; condition 80% -0.80, 90% -0.28, 100% +0.18 - bigger than any attribute or tactical setting. Measured
+// from 100% and shared out over the eleven starters, that is what one player's state costs his team (taken as adding
+// up player by player; the study only moved whole teams). Study 1 puts one in-game point on every attribute the
+// engine rewards at about 0.36 points per game for a team, 0.033 for one starter, which turns the cost into attribute
+// points: it comes off his rating as if each attribute were that much lower (75% sharpness ~1.5, 80% condition
+// ~2.7). Below the lowest measured value (50% sharpness, 80% condition) the last slope just continues.
+const FITNESS_PPG = {
+  sharpness: [[50, -(1.03 + 0.16) / 11], [75, -(0.37 + 0.16) / 11], [100, 0]],
+  condition: [[80, -(0.80 + 0.18) / 11], [90, -(0.28 + 0.18) / 11], [100, 0]],
+};
+const PPG_PER_ATTR_POINT = 0.36 / 11;
+
+/** Points per game (<= 0) one starter costs his team at this percentage, from a FITNESS_PPG curve. */
+function fitnessPpg(curve, pct) {
+  if (typeof pct !== 'number' || pct !== pct) return 0;          // not known (a CSV import): no cost
+  const x = clamp(pct, 0, 100);
+  let i = 1;
+  while (i < curve.length - 1 && x > curve[i][0]) i++;
+  const [x0, y0] = curve[i - 1];
+  const [x1, y1] = curve[i];
+  return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+}
+
+/** What his condition and match sharpness today cost: points per game for his team (<= 0) and attribute points
+ * (>= 0, what comes off his rating with "Use today's fitness" on). */
+function fitnessCost(player) {
+  const ppg = fitnessPpg(FITNESS_PPG.sharpness, player.sharpness) + fitnessPpg(FITNESS_PPG.condition, player.condition);
+  return { ppg, cost20: -ppg / PPG_PER_ATTR_POINT };
+}
+
 // --- Slot scoring ---
 //
 // A slot's rating is how well a player's attributes suit its in-possession role and its out-of-possession role,
@@ -540,14 +575,16 @@ function calculateSlotScore(player, slot, options) {
   const foot = footMultiplierFor(player, slotSideFor(slot.positionCode, slotMeta.group), role.ip);
   const hidden = hiddenMultiplier(player, strength);
   const potentialMultiplier = opts.factorPotential ? potentialMultiplierFor(potential) : 1.0;
+  const fitness = opts.fitness ? fitnessCost(player).cost20 : 0;      // today's condition and sharpness
 
-  const finalScore = (base20 / 20) * 100 * familiarity.penalty * foot * hidden * potentialMultiplier;
+  const finalScore = (Math.max(1, base20 - fitness) / 20) * 100 * familiarity.penalty * foot * hidden * potentialMultiplier;
   return {
     score: Math.round(finalScore * 10) / 10,
     familiarity,
     ipFit: ipFit === null ? null : Math.round((ipFit / 20) * 1000) / 10,
     oopFit: oopFit === null ? null : Math.round((oopFit / 20) * 1000) / 10,
     hiddenMultiplier: hidden,
+    fitnessCost: fitness,
     potential,
     ability,
   };
@@ -562,6 +599,7 @@ function rankPlayersForSlot(slot, role, players, options) {
     ranked.push({
       player, score: result.score, familiarity: result.familiarity, ipFit: result.ipFit, oopFit: result.oopFit,
       hiddenMultiplier: result.hiddenMultiplier, potential: result.potential, ability: result.ability,
+      fitnessCost: result.fitnessCost,
     });
   }
   return ranked.sort((a, b) => b.score - a.score);

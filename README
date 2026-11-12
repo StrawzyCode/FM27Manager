@@ -85,6 +85,20 @@ players, and other clubs' players, are not detected (they read as fit).
 `http://127.0.0.1:47027/api/debug/injuries` shows exactly what was found (every list entry,
 every recent injury record and why it was or wasn't counted), to compare with the Medical Centre.
 
+**Condition and match sharpness:** every squad table (Best XI, Squad Depth, Tactical Fit,
+bench) has a "Con / Shp" column with each player's condition and match sharpness today, in
+per cent, read from the game (FM27 itself only shows them as icons). They are read again
+every time the squad loads, so they stay current without a full rescan. Hover a value for
+what it costs. **Use today's fitness** (toolbar, Squad Depth / Tactical Fit / Tactic Advisor /
+Team Info) takes that cost off each rating, so the Best XI and the Tactic Advisor pick for
+today's match. Fm-Match-Lab's Study 5 replayed real FM27 matches with a whole team at a set
+level. Against fully fit, 75% sharpness cost 0.53 points per game and 50% cost 1.19; 90%
+condition cost 0.46 and 80% cost 0.98. That is more than any attribute or tactic setting.
+Shared over the eleven starters, one player at 75% sharpness costs about 0.05 points per game.
+That is worth about 1.5 points off each of his attributes, since one point on every attribute
+the engine rewards is worth about 0.033 per starter (Study 1). The values were checked against
+FM's own icons and condition bands for the 75 players of a live save (see `fm26mem/layout.py`).
+
 **Position order:** every page that lists positions (Squad Depth, Best XI,
 Tactical Fit, Potential, Scouting, the Position Fit selector) shows them
 goalkeeper first, then back to front and left to right - defenders, wing-backs

@@ -30,6 +30,12 @@ open: no injury was older than a week, so the department-list path (`anchors` wa
 live. Redo step 2 when an injury has been running for more than a week. (FM's Filter pop-ups, e.g.
 the Medical Centre's U20/U18 boxes, don't take clicks from desktop automation; use the squad tabs.)
 
+**Seen 12/11/2026 (game date 11/04/2027), not yet investigated:** the Medical Centre lists Tuomas Collin
+(first team) with a badly fractured wrist, 3 weeks, back for the PK-35 game on 25/4. The app reads him as
+fit (`injured: false` in `/api/squad`), so this looks like the first injury older than a week seen live,
+and the department-list path missed it. `/api/debug/injuries` couldn't be read that day: the PC was short
+of memory and the injury scan's 32 MB buffers failed to allocate.
+
 Reported problem: in the KäPa save, injured players were missing.
 
 1. Open the Medical Centre's *Current Injuries* list in FM and note every injured player.
@@ -68,6 +74,23 @@ these types (the 0-21 rules also accept 15-21 rows, since a player only gets the
 Still to check: whether the game's own Player Search filter *Home-Grown Status Is Trained in nation (0-21)*
 also lists players who only have a 15-21 row (e.g. Mikko Kuningas for Finland). The app assumes it does.
 If the game's filter is literal, change `nation0` / `club0` in `HOME_GROWN_RULES` to `(L.HG_0_21,)`.
+
+## 2b. Condition and match sharpness: done (record + 0x114 / + 0x110)
+
+**Found 12/11/2026 (game date 11/04/2027, a match day).** Both are u16s in the player record, 0..10000:
+sharpness at `+0x110`, condition at `+0x114`. They were found by dumping the 22 first-team records and
+looking for a field that split the sharp starters from the "Lacking Sharpness" subs, and one that put
+Alberto Ferrer (FM: "Good, Tired") lowest among the starters. FM27 never shows either as a number (no
+column, tooltip or profile panel does; the heart's tooltip gives a band, the sharpness icon five levels),
+so they were checked against those for all 75 squad players (First Team, U20s, U18s). Every player's
+band fits the value: condition "Fair" at 73.8%, "Good" from 78.4 to 85.4%, "Excellent" from 87.2%;
+sharpness orange arrow down at 40.5%, dash 53-59.5%, one arrow 63-72%, two arrows 74.7-83%, tick from 85%.
+`fm26mem/layout.py` lists the players. The scale is the one Fm-Match-Lab writes into the match engine
+(condition 8000 = 80%).
+
+Still to check: watch the values move across a day. After a match, the starters' condition should drop
+and their sharpness hold or rise, and the subs' sharpness should fall. Compare `/api/squad` before and
+after FM advances a day (no rescan is needed: the squad list re-reads both every time it loads).
 
 ## 3. Player interest: tune the estimate against the game's lists
 

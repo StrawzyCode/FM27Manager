@@ -156,6 +156,9 @@
       info: { Player: p.name, Age: p.age || null, Position: p.pos }, raw, normRaw, injured, injury: p.injury || '',
       _v: v, ratings: p.ratings, feet: { l: p.attrs[lf] / 5, r: p.attrs[rf] / 5 },
       ca: p.ca, pa: p.pa, valueNum: p.value || 0, wageNum: p.wage || 0, expires: p.expires || '',
+      // Today's condition and match sharpness in % (the squad list re-reads them on every load).
+      condition: typeof p.condition === 'number' ? p.condition : undefined,
+      sharpness: typeof p.sharpness === 'number' ? p.sharpness : undefined,
     };
   }
 

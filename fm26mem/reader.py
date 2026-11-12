@@ -231,6 +231,8 @@ class Snapshot:
         self.rep = np.stack([_u16(N, L.OFF_REP + 2 * i) for i in range(3)], axis=1)
         self.flags = _u16(N, L.OFF_FLAGS)
         self.value = _u32(N, L.OFF_VALUE)
+        self.condition = _u16(N, L.OFF_CONDITION)         # today's, 0..10000; refresh_fitness() re-reads them
+        self.sharpness = _u16(N, L.OFF_SHARPNESS)
         self.height = N[:, L.OFF_HEIGHT].astype(np.int32)
         self.ratings = N[:, L.OFF_RATINGS:L.OFF_RATINGS + 15]
         self.attrs = N[:, L.OFF_ATTRS:L.OFF_ATTRS + 54]
@@ -815,6 +817,29 @@ class Snapshot:
             return ''
         return text[0].upper() + text[1:]
 
+    # ------------------------------------------------------------ fitness
+    def refresh_fitness(self, idx):
+        """Read condition and match sharpness again for the given players, straight from the game, so a squad list
+        shows today's values without a full rescan (both change every day). One small read per player: the 0x40
+        bytes from the sharpness to the player ID. A record whose ID no longer matches (its page moved, another save
+        was loaded) keeps the values from the scan. Returns how many players were refreshed."""
+        idx = np.asarray(idx, dtype=np.int64)
+        if not len(idx):
+            return 0
+        lo = L.OFF_SHARPNESS
+        rows, ok = gather(self.proc, (self.addrs[idx] + lo).astype(np.uint64), L.OFF_ID + 4 - lo)
+        cond, shp = _u16(rows, L.OFF_CONDITION - lo), _u16(rows, L.OFF_SHARPNESS - lo)
+        same = ok & (_u32(rows, L.OFF_ID - lo) == self.ids[idx]) & (cond <= L.FITNESS_MAX) & (shp <= L.FITNESS_MAX)
+        self.condition[idx[same]] = cond[same]
+        self.sharpness[idx[same]] = shp[same]
+        return int(same.sum())
+
+    @staticmethod
+    def _percent(raw):
+        """0..10000 -> a percentage with one decimal (None if out of range)."""
+        raw = int(raw)
+        return round(raw / 100, 1) if raw <= L.FITNESS_MAX else None
+
     # ------------------------------------------------- per-subset enrichment
     def enrich(self, idx):
         """Fill club / contract details for the given player indices (cached)."""
@@ -906,7 +931,9 @@ class Snapshot:
             'wage': int(wage),
             'expires': expiry,
             'height': int(self.height[i]),
-            'rep': [int(x) for x in self.rep[i]],
+            'condition': self._percent(self.condition[i]),           # today, % (see refresh_fitness)
+            'sharpness': self._percent(self.sharpness[i]),           # match sharpness today, %
+            'rep':[int(x) for x in self.rep[i]],
             'status': ST_LABELS[status],
             'loanFrom': parent if status == ST_LOAN_IN else '',     # a loan-in is another club's player
             'parent': parent,                                        # contract holder while on loan anywhere
